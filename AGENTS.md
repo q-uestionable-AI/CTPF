@@ -165,3 +165,25 @@ echo "feat: description here" > .commitmsg && git commit -F .commitmsg && del .c
 ```
 
 This does not apply to PowerShell, bash, or other shells.
+
+---
+
+## Cursor Cloud specific instructions
+
+Environment is provisioned by the startup update script (`uv sync --group dev --python 3.11`);
+`uv` lives in `~/.local/bin` (already on PATH via `.bashrc`). Standard commands are in the
+`## Core Commands` section above — use those. Notes below are non-obvious gotchas only.
+
+- **Pin the venv to Python 3.11.** The repo has no committed lockfile and `mypy` is configured
+  with `python_version = "3.11"`. If the venv is built on Python 3.12+, `mypy` fails inside the
+  `numpy` stubs (`Type statement is only supported in Python 3.12 and greater`). Always create the
+  venv with `--python 3.11` (matches the CI lint job). Rebuild with `uv sync --group dev --python 3.11`
+  if `mypy` reports that stub error.
+- **Web UI:** `uv run qai ui --port <PORT> --no-browser` starts FastAPI bound to `127.0.0.1` only.
+  It auto-selects a free port if `--port` is omitted and writes the chosen port to `~/.qai/port`.
+  All state (targets, runs, findings) persists to the SQLite DB at `~/.qai/qai.db`.
+- **Known brittle tests:** A handful of CLI tests (in `tests/core/test_cli_prompt.py`,
+  `tests/inject/test_cli.py`, `tests/ipi/test_cli.py`) are sensitive to `typer`/`click` and `rich`
+  versions. Because there is no lockfile, `uv sync` resolves the newest releases, which can drift
+  from what these tests assert (e.g. `typer._click.exceptions.Exit` vs `click.exceptions.Exit`,
+  and `rich` truncating table column text). These failures are dependency drift, not code bugs.
