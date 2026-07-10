@@ -486,7 +486,10 @@ class KnowledgeBase:
         Returns:
             ChromaDB Collection instance.
         """
-        return self._client.get_or_create_collection(name=name)
+        return self._client.get_or_create_collection(
+            name=name,
+            embedding_function=None,
+        )
 
     def ensure_indexed(self, force: bool = False) -> None:
         """Ensure the knowledge base is up to date.
@@ -654,7 +657,10 @@ class KnowledgeBase:
         with contextlib.suppress(Exception):
             self._client.delete_collection(name=collection_name)
 
-        collection = self._client.create_collection(name=collection_name)
+        collection = self._client.create_collection(
+            name=collection_name,
+            embedding_function=None,
+        )
 
         if not chunks:
             return
@@ -709,7 +715,10 @@ class KnowledgeBase:
             (USER_COLLECTION, user_k),
         ]:
             try:
-                collection = self._client.get_collection(name=coll_name)
+                collection = self._client.get_collection(
+                    name=coll_name,
+                    embedding_function=None,
+                )
             except Exception:
                 logger.debug("Collection '%s' not found, skipping.", coll_name)
                 continue

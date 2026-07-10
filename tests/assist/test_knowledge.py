@@ -2,14 +2,63 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import MagicMock, call, patch
+
 from q_ai.assist.knowledge import (
+    PRODUCT_COLLECTION,
+    USER_COLLECTION,
     DocumentChunk,
+    KnowledgeBase,
     _parse_frontmatter,
     _split_long_chunk,
     _split_on_headings,
     chunk_document,
     strip_mdx_jsx,
 )
+
+
+class TestKnowledgeBaseConfiguration:
+    """Tests for security-sensitive ChromaDB collection configuration."""
+
+    def test_disables_chromadb_embedding_function(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        with (
+            patch("q_ai.assist.knowledge._CHROMA_DIR", tmp_path / "chroma"),
+            patch("q_ai.assist.knowledge.chromadb.PersistentClient", return_value=client),
+            patch("q_ai.assist.knowledge.get_embedder", return_value=MagicMock()),
+        ):
+            knowledge_base = KnowledgeBase(knowledge_dir=tmp_path / "knowledge")
+
+        knowledge_base._get_or_create_collection(PRODUCT_COLLECTION)
+        knowledge_base._store_chunks(PRODUCT_COLLECTION, [])
+
+        client.get_or_create_collection.assert_called_once_with(
+            name=PRODUCT_COLLECTION,
+            embedding_function=None,
+        )
+        client.create_collection.assert_called_once_with(
+            name=PRODUCT_COLLECTION,
+            embedding_function=None,
+        )
+
+    def test_retrieve_disables_chromadb_embedding_function(self, tmp_path: Path) -> None:
+        client = MagicMock()
+        client.get_collection.return_value.count.return_value = 0
+        embedder = MagicMock()
+        embedder.encode.return_value = [[0.0]]
+        with (
+            patch("q_ai.assist.knowledge._CHROMA_DIR", tmp_path / "chroma"),
+            patch("q_ai.assist.knowledge.chromadb.PersistentClient", return_value=client),
+            patch("q_ai.assist.knowledge.get_embedder", return_value=embedder),
+        ):
+            knowledge_base = KnowledgeBase(knowledge_dir=tmp_path / "knowledge")
+
+        assert knowledge_base.retrieve("query") == []
+        assert client.get_collection.call_args_list == [
+            call(name=PRODUCT_COLLECTION, embedding_function=None),
+            call(name=USER_COLLECTION, embedding_function=None),
+        ]
 
 
 class TestStripMdxJsx:

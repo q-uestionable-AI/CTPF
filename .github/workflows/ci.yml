@@ -86,12 +86,17 @@ jobs:
 
       - name: pip-audit (dependency vulnerabilities)
         # CVE-2026-4539: pygments ReDoS in AdlLexer — no fix available upstream (2.19.2 is latest)
+        # PYSEC-2026-311 / CVE-2026-45829 (reviewed 2026-07-10): ChromaDB remote-code
+        # execution through untrusted embedding configuration; no fixed release is available.
+        # q-AI uses embedded clients, disables Chroma embedding functions, and supplies embeddings.
+        # Remove this ignore as soon as ChromaDB publishes a patched release.
         # aiohttp 3.13.3 CVEs - litellm 1.82.2+ hard-pins aiohttp==3.13.3
         # Fixed in aiohttp 3.13.4 but unpinnable until litellm releases fix
         # Remove these ignores when litellm unpins aiohttp
         run: >
           uv run pip-audit
           --ignore-vuln CVE-2026-4539
+          --ignore-vuln PYSEC-2026-311
           --ignore-vuln CVE-2026-34515
           --ignore-vuln CVE-2026-34513
           --ignore-vuln CVE-2026-34516

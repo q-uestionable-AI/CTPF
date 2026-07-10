@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import ANY, MagicMock, call, patch
+
 import pytest
 
 pytest.importorskip("chromadb")
@@ -29,6 +31,26 @@ def docs() -> list[CorpusDocument]:
         CorpusDocument(id="doc-2", text="Time off and vacation request process", source="test"),
         CorpusDocument(id="doc-3", text="Expense reimbursement procedures", source="test"),
     ]
+
+
+class TestRetrievalCollectionConfiguration:
+    """Tests for security-sensitive ChromaDB collection configuration."""
+
+    def test_disables_chromadb_embedding_function(self) -> None:
+        client = MagicMock()
+        first_collection = MagicMock()
+        first_collection.name = "test-collection"
+        client.create_collection.return_value = first_collection
+
+        with patch("q_ai.rxp.collection.chromadb.Client", return_value=client):
+            collection = RetrievalCollection(name="test-collection", embedder=MagicMock())
+
+        collection.reset()
+
+        assert client.create_collection.call_args_list == [
+            call(name=ANY, embedding_function=None),
+            call(name="test-collection", embedding_function=None),
+        ]
 
 
 @pytest.mark.integration

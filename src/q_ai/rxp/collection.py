@@ -29,7 +29,10 @@ class RetrievalCollection:
         self._client = chromadb.Client()
         # Append UUID to avoid name collisions across instances
         unique_name = f"{name}-{uuid.uuid4().hex[:8]}"
-        self._collection = self._client.create_collection(name=unique_name)
+        self._collection = self._client.create_collection(
+            name=unique_name,
+            embedding_function=None,
+        )
         self._poison_ids: set[str] = set()
 
     def ingest(self, documents: list[CorpusDocument]) -> int:
@@ -111,7 +114,10 @@ class RetrievalCollection:
         # ChromaDB doesn't have a clear method; delete and recreate
         name = self._collection.name
         self._client.delete_collection(name)
-        self._collection = self._client.create_collection(name=name)
+        self._collection = self._client.create_collection(
+            name=name,
+            embedding_function=None,
+        )
         self._poison_ids.clear()
 
     @property
