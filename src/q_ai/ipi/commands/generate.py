@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-import click
 import typer
 
 from q_ai.core.cli.prompt import build_teaching_tip, is_tty, prompt_or_fail
@@ -35,6 +34,8 @@ from q_ai.ipi.sweep_selection import (
     TieRefusal,
     select_template_for_target,
 )
+
+_COMMANDLINE_SOURCE_NAME = "COMMANDLINE"
 
 
 def parse_techniques(technique_str: str) -> list[Technique]:
@@ -244,7 +245,7 @@ def _resolve_template_for_target(
         return template
 
     source = ctx.get_parameter_source("template")
-    if source == click.core.ParameterSource.COMMANDLINE:
+    if source is not None and source.name == _COMMANDLINE_SOURCE_NAME:
         return template
 
     result = select_template_for_target(target)

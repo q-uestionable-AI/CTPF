@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import click.exceptions
 import pytest
 import typer
 
@@ -41,7 +40,7 @@ class TestPromptOrFail:
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_exits_when_no_tty_and_missing(self, _mock: object) -> None:
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             prompt_or_fail("NAME", None, "Enter name")
 
     @patch("q_ai.core.cli.prompt.typer.prompt", return_value="prompted-val")
@@ -65,7 +64,7 @@ class TestPromptOrFailMultiple:
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_exits_listing_all_missing_non_tty(self, _mock: object) -> None:
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             prompt_or_fail_multiple(
                 [
                     ("A", None, "Enter A"),
@@ -135,7 +134,7 @@ class TestPromptTransport:
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_low_confidence_no_tty_exits(self, _mock: object) -> None:
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             prompt_transport("http://localhost:3000")
 
     @patch("q_ai.core.cli.prompt.typer.prompt", return_value="streamable-http")
