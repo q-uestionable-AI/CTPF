@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from q_ai.core.schema import migrate
 from q_ai.ipi.callback_state import build_state, write_state
 from q_ai.server.app import create_app
 from q_ai.services.managed_listener import ListenerState, ManagedListenerHandle
@@ -36,18 +34,6 @@ def _toggle_input_has_attrs(html: str, *required_attrs: str) -> bool:
         return False
     tag = match.group(0)
     return all(re.search(rf"\b{re.escape(attr)}\b", tag) for attr in required_attrs)
-
-
-@pytest.fixture
-def tmp_db(tmp_path: Path) -> Path:
-    db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(str(db_path))
-    try:
-        migrate(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    return db_path
 
 
 @pytest.fixture
