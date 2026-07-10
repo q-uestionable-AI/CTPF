@@ -24,25 +24,11 @@ from q_ai.core.db import (
     update_run_status,
 )
 from q_ai.core.models import RunStatus
-from q_ai.core.schema import migrate
 from q_ai.orchestrator.runner import WorkflowRunner
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    """Create a temporary database with schema applied."""
-    path = tmp_path / "test.db"
-    conn = sqlite3.connect(str(path))
-    try:
-        migrate(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    return path
 
 
 @pytest.fixture

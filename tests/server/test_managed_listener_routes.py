@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from q_ai.core.schema import migrate
 from q_ai.ipi.callback_state import build_state, write_state
 from q_ai.server.app import create_app
 from q_ai.services.managed_listener import (
@@ -20,19 +18,6 @@ from q_ai.services.managed_listener import (
     ManagedListenerStartupError,
     ManagedListenerStuckStopError,
 )
-
-
-@pytest.fixture
-def tmp_db(tmp_path: Path) -> Path:
-    """Create a temp SQLite DB with schema applied."""
-    db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(str(db_path))
-    try:
-        migrate(conn)
-        conn.commit()
-    finally:
-        conn.close()
-    return db_path
 
 
 @pytest.fixture
