@@ -60,8 +60,21 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          uv run pytest -q
+          -n 2
+          --dist=worksteal
+          --durations=40
+          --durations-min=1
+
       - name: Test
-        run: uv run pytest -q
+        if: runner.os != 'Windows'
+        run: >
+          uv run pytest -q
+          --durations=40
+          --durations-min=1
 
       - name: Smoke test CLI
         run: uv run qai --help
