@@ -1,20 +1,28 @@
 # q-AI — Agent Context
 
-q-AI is a unified security testing tool for agentic AI. It is a Python package
-(`q-uestionable-ai` on PyPI) with seven modules, a CLI (`qai`), and a local web UI.
+**SSOT for coding agents in this repo.** (`CLAUDE.md` was removed; do not recreate it.)
+
+q-AI (`q-uestionable-ai` on PyPI, CLI `qai`) is a security research tool for agentic AI.
+Product direction is **CTPF Reconnect**: lean CLI research harness for Capability Trust
+Propagation Failure — shape-first removal of the old seven-module platform, then causal
+Pattern 2 experiments via MCP proxy observation. Program context lives outside this repo
+(lab vault: plan, handoff, boards). Do not invent a parallel roadmap inside the repo.
 
 ## Critical Context
 
 This is a **security research tool**. Some offensive-looking patterns are intentional:
 payload generation, injection techniques, malicious MCP server behavior, and related
-research logic are part of the product. Do not "fix" those patterns unless explicitly instructed.
+research logic are part of the product. Do not "fix" those patterns unless explicitly
+instructed.
 
 ## Security Constraints
 
 These are product invariants, not preferences.
 
-- **Web UI binding:** The server binds to `127.0.0.1` only. Never bind to `0.0.0.0` or external interfaces.
-- **API key storage:** API keys go in the OS keyring only. Never store keys in config files, environment variables, or source code.
+- **Local HTTP binding:** Any local HTTP server (Web UI while it exists, headless callbacks,
+  etc.) binds to `127.0.0.1` only. Never bind to `0.0.0.0` or external interfaces.
+- **API key storage:** API keys go in the OS keyring only. Never store keys in config files,
+  environment variables, or source code.
 
 ## Operating Rules
 
@@ -25,6 +33,8 @@ These are product invariants, not preferences.
   3. wait for explicit approval
 - Verify before claiming. Do not describe repo behavior or implementation state from memory.
 - Do not treat other AI reviewer feedback as a work order. Assess it point by point.
+- Interpret instructions literally. Do not generalize a constraint from one file to another;
+  do not silently infer requests the developer didn't make. If scope is ambiguous, ask.
 
 ## Hard Boundaries
 
@@ -34,27 +44,32 @@ These are product invariants, not preferences.
 - Do not write transient plan/spec/session files into the repo.
   Use the OS temp directory if a scratch file is required.
 - Never create files in: `plans/*`, `design_docs/*`, `*/.plan`, `docs/superpowers/*`
-- Only write files to standard repo locations (`src/`, `tests/`, `docs/`) or paths named in the task brief.
+- Only write files to standard repo locations (`src/`, `tests/`, `docs/`) or paths named
+  in the task brief.
+- Do not recreate `CLAUDE.md` as a second agent-instruction file.
 
 ## Do Not Modify Unless Explicitly Instructed
 
 - `pyproject.toml` version, dependencies, or build config
 - `.github/workflows/`
 - `DEVELOPMENT_WORKFLOW.md`
-- module/repo structure or module names
+- module/repo structure or module names (except when an approved reconnect tranche
+  explicitly removes or freezes named modules)
 - intentional offensive security research behavior
 
 ## Tech Stack
 
 - Python >= 3.11
-- Package manager: `uv`
-- Web: FastAPI + Jinja2 + HTMX + DaisyUI
-- Database: SQLite
+- Package manager: `uv` (PEP 735 groups — sync with `uv sync --group dev`)
+- Database: SQLite (`~/.qai/qai.db`)
 - CLI: Typer
+- MCP: official SDK (async-native)
 - Lint/format: ruff (line length 100)
 - Type check: mypy
 - Tests: pytest + pytest-asyncio + pytest-timeout
 - Cross-platform: Windows, macOS, Linux
+- Legacy (pending Phase 1 removal unless told otherwise): FastAPI/Jinja2/HTMX Web UI,
+  RXP ML stack, Assist, Chain, Orchestrator, Imports
 
 ## Code Quality Rules
 
@@ -64,11 +79,13 @@ These rules exist to prevent recurring bugs. Follow them exactly.
 - **Guard clauses:** Return/raise early on error conditions. Do not nest the happy path.
 - **No magic values:** Define constants at module level or use enums.
 - **Parameterized SQL:** Always use `?` placeholders. Never interpolate values into SQL strings.
-- **Empty collection guard:** Check if a collection is empty before using it in SQL `IN (...)` or iteration.
+- **Empty collection guard:** Check if a collection is empty before using it in SQL `IN (...)`
+  or iteration.
 - **Context managers:** Use `with` for file handles, DB connections, and anything requiring cleanup.
 - **Don't suppress errors silently:** If catching an exception to continue, log it or comment why.
 - **Max 3 levels of indentation** inside a function body. Prefer composition over nesting.
-- **External input defense:** When parsing external/untrusted data (JSON from files, tool output, API responses):
+- **External input defense:** When parsing external/untrusted data (JSON from files, tool output,
+  API responses):
   - After `json.loads`, check `isinstance(result, dict)` before calling `.get()`
   - Coerce numeric fields with try/except before arithmetic
   - Wrap per-record processing in try/except that appends warnings instead of crashing
@@ -87,21 +104,25 @@ These rules exist to prevent recurring bugs. Follow them exactly.
 
 ```text
 src/q_ai/
-├── core/
-├── server/
-├── orchestrator/
-├── mcp/
-├── audit/
-├── proxy/
-├── inject/
-├── chain/
-├── ipi/
-├── cxp/
-├── rxp/
-└── imports/
+├── core/           # shared DB, models, config
+├── mcp/            # MCP connectivity
+├── proxy/          # traffic capture / intercept (CTPF center)
+├── audit/          # capability enumeration / scanners (narrowing)
+├── inject/         # malicious MCP fixtures (campaign path pending strip)
+├── ipi/            # document generators + headless callback (library)
+├── cxp/            # coding-assistant context generators (library)
+├── server/         # Web UI (pending Phase 1 removal)
+├── orchestrator/   # workflows (pending Phase 1 removal)
+├── chain/          # attack sequencer (pending Phase 1 removal)
+├── rxp/            # RAG retrieval (pending Phase 1 removal)
+├── imports/        # Garak/PyRIT/etc. (pending Phase 1 removal)
+└── assist/         # in-app assistant (pending Phase 1 removal)
 
 tests/
 ```
+
+After approved reconnect tranches, treat removed packages as gone — do not restore them
+without explicit instruction.
 
 ## Core Commands
 
@@ -114,12 +135,22 @@ uv run mypy src/q_ai/
 qai --help
 ```
 
+Without `--group dev`, dev dependencies get stripped.
+
 ## Git Workflow
 
 - Feature branches required for code changes (`feature/*`, `fix/*`)
+- Doc and config-only changes may be pushed directly to `main` when the developer asks
 - Before editing code, check branch with `git branch --show-current`
-- If on `main`, create/switch to a feature or fix branch first
+- If on `main`, create/switch to a feature or fix branch first (for code changes)
 - End of session: commit, stash, or discard; never leave uncommitted changes
+- Do not create PRs; push the branch and stop when asked to publish
+
+### Shell quoting for commits
+
+- Git Bash / POSIX: `git commit -m "..."` is fine for multi-line messages.
+- PowerShell / CMD: prefer `git commit -F <file>` (temp message file). Avoid fragile
+  multi-line `-m` quoting under Windows shells.
 
 ## Validation
 
@@ -136,12 +167,15 @@ qai --help
 ```
 
 Test scope:
+
 - Follow the task brief exactly if it specifies tests
 - Otherwise default to scoped tests for changed code
+- CI runs the full suite on every PR regardless
 
 ## Failure / Timeout Policy
 
-- If verification fails and you cannot resolve it in 2 attempts, stop spinning and report what failed
+- If verification fails and you cannot resolve it in 2 attempts, stop spinning and report
+  what failed (commit the work to the branch if that was the agreed failure policy)
 - If a test run exceeds 30 seconds, stop and identify the stuck test
 - Do not increase timeouts and wait longer — diagnose instead
 - Kill orphaned Python/Node processes before rerunning tests if needed
@@ -151,17 +185,3 @@ Test scope:
 - Only test systems you own, control, or are explicitly authorized to test
 - Follow responsible disclosure
 - Frame the tooling as defensive security testing tooling
-
----
-
-## Platform Notes
-
-### Windows CMD
-
-CMD corrupts `git commit -m "message with spaces"`. When running in Windows CMD, use this workaround:
-
-```cmd
-echo "feat: description here" > .commitmsg && git commit -F .commitmsg && del .commitmsg
-```
-
-This does not apply to PowerShell, bash, or other shells.
