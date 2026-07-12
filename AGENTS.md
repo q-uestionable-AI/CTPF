@@ -108,8 +108,8 @@ src/q_ai/
 ├── core/           # shared DB, models, config
 ├── mcp/            # MCP connectivity
 ├── proxy/          # traffic capture / intercept (CTPF center)
-├── ctpf/           # trust-transition kernel (Pattern 2 + cascade)
-├── audit/          # capability enumeration / scanners (narrowing)
+├── ctpf/           # trust-transition and evidence kernel
+├── audit/          # capability enumeration and scanners
 ├── inject/         # malicious MCP fixtures (fixtures-only)
 ├── ipi/            # document generators + headless callback (library)
 ├── cxp/            # coding-assistant context generators (library)
@@ -167,7 +167,6 @@ Test scope:
 
 - Follow the task brief exactly if it specifies tests
 - Otherwise default to scoped tests for changed code
-- CI runs the full suite on every PR regardless
 
 ## Failure / Timeout Policy
 
