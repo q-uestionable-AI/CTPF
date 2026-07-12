@@ -1,7 +1,10 @@
 import inspect
 import unittest
 
-from q_ai.ipi.commands.listen import listen
+from typer.testing import CliRunner
+
+from q_ai.ipi.cli import app
+from q_ai.ipi.commands.listen import _is_loopback_host, listen
 from q_ai.ipi.server import start_server
 
 
@@ -19,6 +22,21 @@ class TestServerDefaults(unittest.TestCase):
         params = sig.parameters
         self.assertEqual(params["host"].default, "127.0.0.1")
         self.assertEqual(params["port"].default, 8080)
+
+    def test_loopback_host_helpers(self):
+        """Accept loopback names/addresses; reject external binds."""
+        self.assertTrue(_is_loopback_host("127.0.0.1"))
+        self.assertTrue(_is_loopback_host("localhost"))
+        self.assertTrue(_is_loopback_host("::1"))
+        self.assertFalse(_is_loopback_host("0.0.0.0"))
+        self.assertFalse(_is_loopback_host("192.168.1.10"))
+
+    def test_cli_rejects_non_loopback_host(self):
+        """``qai ipi listen --host 0.0.0.0`` must exit non-zero."""
+        runner = CliRunner()
+        result = runner.invoke(app, ["listen", "--host", "0.0.0.0"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("non-loopback", result.output.lower())
 
 
 if __name__ == "__main__":

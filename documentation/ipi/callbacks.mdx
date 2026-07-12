@@ -149,7 +149,7 @@ The listener starts a FastAPI server that:
 - Notifies the qai web server via internal HTTP POST for real-time WebSocket updates (configurable via `--notify-url`)
 - Returns fake 404 responses on callback endpoints
 
-The listener binds to `127.0.0.1` by default. Use `--host 0.0.0.0` to listen on all interfaces.
+The listener binds to `127.0.0.1` by default and rejects non-loopback `--host` values. For remote callbacks use `--tunnel cloudflare` instead of binding to all interfaces.
 
 ---
 

@@ -23,13 +23,16 @@ All server settings are configured via CLI flags on `qai ipi listen`:
 # Default — localhost only
 qai ipi listen
 
-# Bind to all interfaces on port 9090
-qai ipi listen --host 0.0.0.0 --port 9090
+# Alternate loopback port
+qai ipi listen --port 9090
+
+# Remote callbacks: keep bind on loopback and use a tunnel
+qai ipi listen --tunnel cloudflare
 ```
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--host`, `-h` | TEXT | `127.0.0.1` | Network interface to bind to |
+| `--host`, `-h` | TEXT | `127.0.0.1` | Loopback interface only (`127.0.0.1`, `localhost`, `::1`) |
 | `--port`, `-p` | INT | `8080` | TCP port to listen on |
 | `--notify-url` | TEXT | `http://127.0.0.1:8899` | Where to send internal hit notifications |
 
@@ -94,9 +97,9 @@ The server exposes a health endpoint at `/health` that returns `{"status": "ok"}
 
 ## Public exposure and tunnel mode
 
-When the listener runs with `--tunnel cloudflare` (see [Remote callbacks via Cloudflare Tunnel](/ipi/callbacks#remote-callbacks-via-cloudflare-tunnel)), a few behaviors differ from a bare listener bound to `127.0.0.1` or a plain `--host 0.0.0.0`.
+When the listener runs with `--tunnel cloudflare` (see [Remote callbacks via Cloudflare Tunnel](/ipi/callbacks#remote-callbacks-via-cloudflare-tunnel)), a few behaviors differ from a bare loopback listener.
 
-**Forwarded-header trust**. In tunnel mode the server resolves each hit's `source_ip` from the `CF-Connecting-IP` header rather than the TCP peer. This trust is scoped to tunnel mode only — a bare `--host 0.0.0.0` listener does **not** trust forwarded headers.
+**Forwarded-header trust**. In tunnel mode the server resolves each hit's `source_ip` from the `CF-Connecting-IP` header rather than the TCP peer. This trust is scoped to tunnel mode only — a bare loopback listener does **not** trust forwarded headers.
 
 **Hardening in tunnel mode**. Tunneled listeners activate defensive measures against public-internet exposure: request body size limits, per-peer rate limiting, and a startup warning banner. These are defaults for tunnel mode and cannot be silently disabled.
 
@@ -108,21 +111,15 @@ When the listener runs with `--tunnel cloudflare` (see [Remote callbacks via Clo
 The callback listener (`qai ipi listen`) is **separate** from the qai Web UI. Only the callback listener should be exposed to external networks. The Web UI must bind to `127.0.0.1` (localhost) only unless you have configured proper authentication. **Do not** forward or publish the Web UI host/port via ngrok, Cloudflare Tunnel, or public IPs — doing so exposes an unauthenticated management interface.
 </Warning>
 
-For testing against cloud-hosted AI targets, the listener must be reachable from the target system:
+For testing against cloud-hosted AI targets, keep the listener on loopback and expose it via tunnel:
 
-- **Local testing:** `http://localhost:8080` works when the agent runs on the same machine
-- **Network testing:** Use your machine's LAN IP (e.g., `http://192.168.1.100:8080`)
-- **Cloud targets:** Use a public IP, or a tunneling service like ngrok or Cloudflare Tunnel
-
-When generating payloads, use the externally reachable address as the `--callback` URL:
+- **Local testing:** `http://127.0.0.1:8080` when the agent runs on the same machine
+- **Cloud targets:** `qai ipi listen --tunnel cloudflare` and use the printed HTTPS URL as `--callback`
 
 ```bash
-# Start the listener
-qai ipi listen --host 0.0.0.0 --port 8080
+# Start the listener with a Cloudflare Quick Tunnel
+qai ipi listen --tunnel cloudflare
 
-# In another terminal, expose it
-ngrok http 8080
-
-# Use the ngrok URL when generating payloads
-qai ipi generate --callback https://abc123.ngrok.io
+# Use the printed tunnel URL when generating payloads
+qai ipi generate --callback https://<tunnel-host>
 ```

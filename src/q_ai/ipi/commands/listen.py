@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Annotated
 
 import typer
@@ -10,6 +11,38 @@ from q_ai.ipi.callback_state import build_state, delete_state, write_state
 from q_ai.ipi.commands._shared import SUPPORTED_TUNNEL_PROVIDERS, app, console
 from q_ai.ipi.server import start_server
 from q_ai.ipi.tunnel import TunnelError, get_tunnel_adapter
+
+_LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True when ``host`` is a loopback name or address."""
+    normalized = host.strip().lower()
+    if normalized in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_loopback_host(host: str) -> str:
+    """Reject non-loopback bind hosts (product invariant).
+
+    Args:
+        host: Requested bind interface.
+
+    Returns:
+        The original host string when it is loopback-safe.
+
+    Raises:
+        typer.Exit: When the host is not loopback-only.
+    """
+    if _is_loopback_host(host):
+        return host
+    console.print(f"[red]X Refusing to bind IPI listener to non-loopback host {host!r}[/red]")
+    console.print("  Bind to 127.0.0.1 (default). For remote callbacks use --tunnel cloudflare.")
+    raise typer.Exit(1)
 
 
 def _run_listen_with_tunnel(
@@ -107,6 +140,7 @@ def listen(
     listener records forwarded client IPs via the ``CF-Connecting-IP``
     header.
     """
+    host = _require_loopback_host(host)
     if tunnel is None:
         start_server(host=host, port=port)
         return
