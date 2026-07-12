@@ -118,7 +118,7 @@ def serve(
     if transport == "stdio":
         server.run(transport="stdio")
     else:
-        server.settings.host = "0.0.0.0"  # noqa: S104  # nosec B104
+        server.settings.host = "127.0.0.1"
         server.settings.port = port
         server.run(transport="streamable-http")
 

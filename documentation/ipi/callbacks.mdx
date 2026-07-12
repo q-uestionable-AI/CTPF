@@ -149,7 +149,7 @@ The listener starts a FastAPI server that:
 - Notifies the qai web server via internal HTTP POST for real-time WebSocket updates (configurable via `--notify-url`)
 - Returns fake 404 responses on callback endpoints
 
-The listener binds to `127.0.0.1` by default. Use `--host 0.0.0.0` to listen on all interfaces.
+The listener binds to `127.0.0.1` by default and rejects non-loopback `--host` values. For remote callbacks use `--tunnel cloudflare` instead of binding to all interfaces.
 
 ---
 
@@ -205,8 +205,7 @@ A tunneled run should show `tunnel` on every hit originating from a cloud target
 
 ## Listener Address
 
-The callback URL embedded in payloads must be reachable from the target system. This means:
+The callback URL embedded in payloads must be reachable from the target system. The listener binds loopback-only (`127.0.0.1` / `localhost` / `::1`); non-loopback `--host` values are rejected. Reachability options:
 
-- **Local testing:** `http://localhost:8080` works when the agent runs on the same machine
-- **Network testing:** Use your machine's LAN IP (e.g., `http://192.168.1.100:8080`)
-- **Cloud targets:** Run the listener behind a Cloudflare Tunnel — see [Remote callbacks via Cloudflare Tunnel](#remote-callbacks-via-cloudflare-tunnel) above.
+- **Local testing:** `http://127.0.0.1:8080` (or `http://localhost:8080`) when the agent runs on the same machine
+- **Cloud / remote targets:** keep the listener on loopback and use `--tunnel cloudflare` — see [Remote callbacks via Cloudflare Tunnel](#remote-callbacks-via-cloudflare-tunnel) above.

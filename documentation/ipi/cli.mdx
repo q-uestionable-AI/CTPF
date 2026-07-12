@@ -385,7 +385,7 @@ Launches the FastAPI server that receives and logs callback requests from AI age
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
 | `--port`, `-p` | INT | No | `8080` | Port to listen on |
-| `--host`, `-h` | TEXT | No | `127.0.0.1` | Host to bind to |
+| `--host`, `-h` | TEXT | No | `127.0.0.1` | Loopback bind only (`127.0.0.1`, `localhost`, `::1`). Non-loopback hosts are rejected. |
 | `--notify-url` | TEXT | No | `http://127.0.0.1:8899` | Main qai server URL for hit notifications |
 | `--tunnel` | TEXT | No | — | Expose the listener via a public tunnel. Supported provider: `cloudflare`. Spawns a provider tunnel subprocess, writes `~/.qai/active-callback` state for cross-process discovery, and records forwarded client IPs via `CF-Connecting-IP` headers. See [Remote callbacks via Cloudflare Tunnel](/ipi/callbacks#remote-callbacks-via-cloudflare-tunnel). |
 
@@ -396,8 +396,8 @@ Launches the FastAPI server that receives and logs callback requests from AI age
 qai ipi listen
 ```
 
-```bash Start on all interfaces, port 9090
-qai ipi listen --host 0.0.0.0 --port 9090
+```bash Remote callbacks via Cloudflare tunnel
+qai ipi listen --tunnel cloudflare
 ```
 </CodeGroup>
 
