@@ -1,15 +1,16 @@
 ---
 title: Quickstart
-description: Install q-ai and run your first MCP server security assessment
+description: Install q-AI and start MCP observation with the proxy CLI
 ---
 
 ## Prerequisites
 
 - **Python 3.11** or later
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
-- **Node.js / npm** — MCP server targets are typically npm packages. Install the example target used below with `npm install -g @modelcontextprotocol/server-memory`.
-- **LLM provider API key** (optional) — Required only for `inject` campaigns and `chain` execution. q-ai supports 100+ providers via [litellm](https://docs.litellm.ai/). Store credentials in the OS keyring or set environment variables. See [Configure a provider](#configure-a-provider-optional) below.
-- **sentence-transformers + chromadb** (optional) — Required only for `rxp` module. Install with `pip install q-uestionable-ai[rxp]`.
+- **Node.js / npm** (optional) — Useful if your MCP target is an npm package you spawn locally
+- **LLM provider API key** (optional) — Only needed if a library workflow or fixture uses a model.
+  Store credentials in the OS keyring via `qai config set-credential`. See
+  [Configure a provider](#configure-a-provider-optional).
 
 ## Install
 
@@ -25,9 +26,17 @@ uv sync --group dev
 ```
 </CodeGroup>
 
+Confirm the CLI:
+
+```bash
+qai --help
+qai --version
+```
+
 ## Configure a provider (optional)
 
-If you plan to run injection campaigns or chain analysis, set up a provider credential. q-ai supports 100+ providers via litellm. Store your API key in the OS keyring using the provider name:
+Provider credentials are optional for the core proxy / targets workflow. If a library
+fixture needs a model, store the API key in the OS keyring (never in config files):
 
 <CodeGroup>
 ```bash Anthropic
@@ -39,129 +48,83 @@ qai config set-credential anthropic
 qai config set-credential openai
 ```
 
-```bash Groq
-qai config set-credential groq
-```
-
 ```bash Other providers
 qai config set-credential <provider-name>
 ```
 </CodeGroup>
 
-Verify configured providers:
-
 ```bash
 qai config list-providers
 ```
 
-Alternatively, set the environment variable directly:
+When selecting a model elsewhere, use the `provider/model` format
+(e.g., `anthropic/claude-sonnet-4-20250514`).
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export GROQ_API_KEY="gsk_..."
-```
-
-When selecting a model, use the `provider/model` format (e.g., `anthropic/claude-sonnet-4-20250514`, `openai/gpt-4o`, `groq/llama-3.3-70b-versatile`).
-
-## Run your first scan
+## Register a target and start the proxy
 
 <Steps>
-  <Step title="Pick a target server">
-    You can scan any MCP server you have permission to test. This guide uses the
-    official MCP memory server as an example. You don't need to start the server
-    manually — q-ai spawns it via the `--command` flag.
-
-    Install the example target if you don't have one:
+  <Step title="Register an MCP target">
+    Point q-AI at a server you are authorized to test:
 
     ```bash
-    npm install -g @modelcontextprotocol/server-memory
+    qai targets add "My Server" http://localhost:3000/sse
+    qai targets list
     ```
+
+    Transports include stdio (command string), SSE, and Streamable HTTP. See
+    [Targets](/cli/targets) and [Transports](/config/transports).
   </Step>
 
-  <Step title="Run the scan">
-    q-ai launches the server as a child process, connects over stdio,
-    enumerates its tools and resources, then runs all 10 scanner modules
-    against it — each mapped to the OWASP MCP Top 10 and MITRE ATLAS.
+  <Step title="Start the proxy">
+    The proxy is the CTPF observation center — capture, optional intercept
+    (forward / modify / drop), and session export:
 
     ```bash
-    qai audit scan "npx @modelcontextprotocol/server-memory"
+    qai proxy --help
     ```
 
-    The transport is inferred automatically — a URL is treated as SSE or Streamable HTTP, a command string as stdio. Override with `--transport` if needed.
+    Configure the MCP client **you control** to connect through the proxy instead of
+    directly to the target. See [Proxy Overview](/proxy/overview).
   </Step>
 
-  <Step title="Review the output">
-    The CLI prints a live summary as it runs:
+  <Step title="Inspect local state">
+    Runs and findings live in SQLite (`~/.qai/qai.db`):
 
-    - **Connected** — confirms the transport and server name
-    - **Findings** — any security issues found, with severity, description, and remediation
-    - **Report saved** — path to the full JSON report
+    ```bash
+    qai runs list
+    qai findings list
+    qai db --help
+    ```
   </Step>
 </Steps>
 
-## Enumerate a server
+## Library tooling (not root CLI pillars)
 
-Before a full scan, you can quickly check what a server exposes:
+Audit, inject, IPI, and CXP are **libraries / research fixtures**, not public `qai`
+subcommands after Phase 1.
 
-```bash
-qai audit enumerate "npx @modelcontextprotocol/server-memory"
-```
-
-This lists the server's tools, resources, and prompts without running any security checks.
-
-## Import external results
-
-If you already use Garak, PyRIT, or any SARIF-producing tool, import their results into qai and associate them with a target. Imported findings inform which inject payloads are prioritized when you run campaigns against that target.
+Examples:
 
 ```bash
-# Register a target
-qai targets add "My Server" http://localhost:3000/sse
+# Inject fixture server
+python -m q_ai.inject serve --transport stdio
 
-# Import Garak results for that target
-qai import report.jsonl --format garak --target <target-id>
+# IPI headless callback listener / generators
+python -m q_ai.ipi --help
 
-# Import PyRIT results for the same target
-qai import conversations.json --format pyrit --target <target-id>
-
-# View all findings (native + imported) for the target
-qai findings list --target <target-id>
+# Audit as a library (import or module entry — not `qai audit`)
+python -c "import q_ai.audit; print('audit library available')"
 ```
 
-See [Import Overview](/imports/overview) for supported formats, taxonomy bridging, and how imported findings drive workflow integration.
-
-## Launch the web UI
-
-```bash
-qai ui
-```
-
-This opens a browser with the workflow launcher — workflow cards for guided security assessments. The same findings are accessible via both the web UI and CLI (`qai findings list`).
-
-Use `--port` to specify a port, or `--no-browser` to start the server without opening a browser.
-
-## Try other modules
-
-```bash
-# Generate indirect prompt injection payloads
-qai ipi generate http://localhost:8080 --technique all --format markdown
-
-# Launch the CXP interactive builder
-qai cxp generate
-
-# Validate RAG retrieval rank
-qai rxp validate --profile hr-policy --model minilm-l6
-
-# View all findings across modules
-qai findings list
-```
+See [Audit Overview](/audit/overview), [Inject Overview](/inject/overview),
+[IPI Overview](/ipi/overview), and [CXP Overview](/cxp/overview).
 
 ## Next steps
 
-- [Core Concepts](/concepts) — MCP protocol, OWASP and MITRE ATLAS mapping, module methodologies, threat model
-- [Audit CLI Reference](/audit/cli) — full scan options and reporting
-- [IPI Overview](/ipi/overview) — indirect prompt injection testing
-- [CXP Overview](/cxp/overview) — context file poisoning for coding assistants
+- [Core Concepts](/concepts) — MCP threat model, CTPF Pattern framing, libraries vs CLI
+- [Proxy Overview](/proxy/overview) — Intercept, modify, replay, export
+- [Architecture Overview](/architecture/overview) — Post–Phase 1 system shape
+- [Responsible Use](/responsible-use) — Authorization requirements
 
 <Warning>
 Only test systems you own, control, or have explicit written authorization to test.

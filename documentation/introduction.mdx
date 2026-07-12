@@ -1,75 +1,71 @@
 ---
 title: "Introduction"
-description: "Security testing for agentic AI"
+description: "CTPF research harness for MCP observation and controlled fixtures"
 ---
 
-## What is q-ai?
+## What is q-AI?
 
-q-ai tests the security of MCP (Model Context Protocol) servers and agentic AI systems. It scans servers for vulnerabilities, tests whether models follow poisoned tool descriptions, intercepts MCP traffic, and measures whether adversarial documents survive RAG retrieval. Findings include execution-level proof that vulnerabilities are exploitable end-to-end, not just scan results.
+q-AI is a local **Capability Trust Propagation Failure (CTPF)** research harness.
+It investigates whether low-trust data — for example an MCP tool result — is silently
+promoted into higher-authority actions when provenance, integrity, authorization scope,
+or intended audience are not preserved.
 
-All findings are mapped to four security frameworks: OWASP MCP Top 10, OWASP Agentic Top 10, MITRE ATLAS, and CWE.
+The product shape is a lean CLI centered on MCP traffic observation and controlled
+mutation via the **proxy**, with local SQLite persistence for targets, runs, findings,
+and evidence. Individual experiments **confirm** or **fail to observe** promotion under
+pinned conditions — they do not “falsify CTPF” as a class.
 
-## Bring what you have, prove what matters
+## Public CLI (transitional)
 
-Already running Garak or PyRIT? qai picks up where they leave off. Import your existing results, associate them with a target, and qai uses those findings to drive its native modules — prioritizing inject payloads based on the compliance patterns your tools already discovered.
+| Command | Role |
+|---------|------|
+| `qai proxy` | Intercept, inspect, modify, and export MCP traffic (Textual TUI) |
+| `qai targets` | Register MCP targets |
+| `qai runs` / `qai findings` | Inspect stored runs and findings |
+| `qai config` / `qai db` | Settings and local database maintenance |
+| `qai --version` | Package version |
 
-```bash
-qai import report.jsonl --format garak --target my-server
-qai import conversations.json --format pyrit --target my-server
-qai import bipia.csv --format bipia --target my-server
-```
+New verbs such as `inspect` / `evidence` are deferred until a CTPF experiment defines
+a real interface.
 
-A Garak, PyRIT, or BIPIA result says "this model follows injected instructions." An audit result says "this MCP server has a vulnerable tool." A qai finding connects the two: the model weakness was exploitable end-to-end through a real agentic system, with proof.
+## Libraries (not root CLI pillars)
 
-See [Import Overview](/imports/overview) for supported formats and [Inject Campaigns](/inject/campaigns) for how imported findings inform payload selection.
+These packages remain in-tree as research fixtures and library tooling. They are **not**
+equal product modules on the public `qai` CLI:
 
-## Modules
+| Library | Role |
+|---------|------|
+| **audit** | Capability enumeration / scanners; SARIF and other report exports |
+| **inject** | Malicious MCP fixture servers (`build_server` + payload templates) |
+| **ipi** | Document generators + headless callback listener |
+| **cxp** | Coding-assistant context-file generators |
 
-| Module     | What it does                                                                                           |
-| ---------- | ------------------------------------------------------------------------------------------------------ |
-| **audit**  | Scans MCP servers for vulnerabilities, maps findings to the OWASP MCP Top 10 and MITRE ATLAS, outputs SARIF |
-| **proxy**  | Intercepts MCP traffic between client and server for inspection, modification, and replay              |
-| **inject** | Tests AI agent susceptibility to tool poisoning and prompt injection using configurable payloads       |
-| **chain**  | Composes multi-step attack sequences across audit findings and inject techniques                       |
-| **ipi**    | Generates adversarial documents with hidden instructions, tracks execution via authenticated callbacks |
-| **cxp**    | Builds poisoned instruction files for coding assistants, validates whether models comply               |
-| **rxp**    | Measures whether adversarial documents appear in top-k retrieval results across embedding models           |
+Invoke library CLIs via `python -m` (for example `python -m q_ai.ipi`,
+`python -m q_ai.inject`) or import the package APIs directly.
 
-## Research
+## Removed in Phase 1
 
-qai's research program studies **Capability Trust Propagation Failure** — how trust properties (provenance, integrity, authorization scope, intended audience) fail to propagate across capability boundaries in multi-step AI systems. It shows up across existing OWASP MCP Top 10 and OWASP Agentic Top 10 categories rather than needing a new one.
+The former seven-module platform surfaces are gone: Web UI (`qai ui`), Assistant,
+Chain, RXP, External Tool Import, orchestrator, and inject campaigns. Do not expect
+those commands or workflows in current releases.
 
-Findings carry execution-level proof. Authenticated callbacks confirm that an attack ran end-to-end through a real agentic system — not that a model was convinced to write attacker-supplied text.
+## Framework mappings (library audit)
 
-Coding assistant context-file poisoning (the `cxp` module) targets real products directly. Positive findings can be filed as CVEs, creating a path to CVE-attributed research rather than research that only lives in published form.
+When using the audit library, findings can map to OWASP MCP Top 10, OWASP Agentic Top 10,
+MITRE ATLAS, and CWE. See [Framework Coverage](/audit/framework-coverage).
 
 ## Quick start
 
-Install via pip (requires Python 3.11+):
-
 ```bash
 pip install q-uestionable-ai
+qai proxy --help
+qai targets add "My Server" http://localhost:3000/sse
 ```
-
-Run your first audit scan against an MCP server:
-
-```bash
-qai audit scan http://localhost:3000/sse
-```
-
-Or launch the web UI:
-
-```bash
-qai ui
-```
-
-## Mitigation guidance system
-
-Every finding includes automated mitigation guidance. The guidance system maps findings to remediation strategies grouped by severity and remediation effort. Use the web UI to toggle guidance on/off per finding, or access it via the CLI.
 
 ## Learn more
 
-- [Quick Start](/quickstart) — Install, configure a provider, run your first scan
-- [Core Concepts](/concepts) — MCP threat model, framework mappings, module methodologies
-- [Responsible Use](/responsible-use) — Authorization requirements and responsible disclosure
+- [Quick Start](/quickstart) — Install, register a target, start the proxy
+- [Core Concepts](/concepts) — MCP threat model, CTPF framing, libraries vs CLI
+- [Proxy Overview](/proxy/overview) — Observation and controlled mutation
+- [Responsible Use](/responsible-use) — Authorization and disclosure
 - [GitHub](https://github.com/q-uestionable-AI/qai)

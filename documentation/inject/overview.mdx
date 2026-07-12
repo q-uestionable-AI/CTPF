@@ -1,59 +1,36 @@
 ---
 title: Overview
-description: Tool poisoning and prompt injection testing against LLM-powered agents
+description: Malicious MCP fixture servers for tool poisoning research
 ---
 
-The inject module tests tool poisoning and prompt injection against LLM models. It loads adversarial payload templates, serves them as MCP tools via a poisoned server, and runs campaigns to measure model susceptibility.
+<Note>
+**Library / research fixture (Phase 1).** Inject is not a root `qai` CLI pillar.
+Use `build_server` from the package or `python -m q_ai.inject` (serve /
+list-payloads). **Campaigns and campaign scoring are removed.** The public CLI
+center is [`qai proxy`](/proxy/overview).
+</Note>
+
+The inject module provides malicious MCP **fixture** servers: load adversarial
+payload templates and serve them as MCP tools via `build_server` so a client you
+control can exercise poisoned tool descriptions and responses.
 
 ## What It Tests
 
-MCP tool descriptions are trusted inputs to AI agents. When an attacker controls or compromises an MCP server, they can embed instructions in tool descriptions to redirect behavior, exfiltrate data, escalate access, or hide actions from the user. The inject module measures how effectively these attacks work against different LLM models.
+MCP tool descriptions are trusted inputs to AI agents. When an attacker controls or compromises an MCP server, they can embed instructions in tool descriptions to redirect behavior, exfiltrate data, escalate access, or hide actions from the user. Fixture servers let you present those adversarial tools to a client under test.
 
 ## How It Works
 
-The inject testing workflow follows three steps:
-
 1. **Load payloads** — Select adversarial tool templates by technique (description poisoning, output injection, cross-tool escalation)
-2. **Serve** — Register payloads as live MCP tools and expose them to the target model
-3. **Campaign** — Test the model's susceptibility by measuring which payloads succeed and how
-
-## Provider Support
-
-Inject campaigns work with any LLM provider supported by litellm (100+ models):
-
-- **Anthropic** — Claude models
-- **OpenAI** — GPT-4, GPT-4o, etc.
-- **Google** — Gemini models
-- **Cohere, Mistral, Ollama** — And many others
-
-Model selection uses provider/model format: `anthropic/claude-sonnet-4-20250514`, `openai/gpt-4o`, `ollama/llama3`, etc.
+2. **Build / serve** — Register payloads as live MCP tools via `build_server` or `python -m q_ai.inject serve`
+3. **Observe** — Point a client you control (optionally through [`qai proxy`](/proxy/overview)) at the fixture server
 
 ## Key Components
 
 - **Payload templates** — Adversarial tool definitions in YAML format across 3 techniques
-- **Inject server** — Dynamic MCP server that registers payloads as live tools
-- **Campaign executor** — Provider-agnostic LLM client that tests each payload
-- **Outcome scoring** — Classifies results as full compliance, partial compliance, refusal with leak, or clean refusal
-- **Evidence collection** — Preserves full provider responses for manual analysis
-
-## What to Expect
-
-Inject campaigns are automated once configured — select a model, select techniques, set rounds, launch. The scoring is string-matching heuristics (not semantic analysis), so the full evidence is preserved for manual review. The iteration comes before the run: crafting or selecting YAML templates that test the right attack vectors for your target.
-
-## Findings-Informed Payload Selection
-
-When running inside the assess workflow, the inject adapter automatically queries audit findings to prioritize which templates are most relevant. Templates declare `relevant_categories` in their YAML metadata (e.g., `tool_poisoning`, `prompt_injection`, `permissions`). If audit found command injection vulnerabilities, templates targeting those categories run first.
-
-This is priority ordering, not exclusion — all selected templates still run. Templates matching audit findings are moved to the front of the queue.
-
-### Imported Findings
-
-Imported external findings (from `qai import --target`) participate in the same mechanism. The inject adapter queries both native audit findings from the current workflow run and imported findings (Garak, PyRIT, SARIF) associated with the same target. If you imported Garak results showing prompt injection vulnerabilities, inject templates with `relevant_categories: [prompt_injection]` will be prioritized alongside any native audit findings.
-
-Without imported findings for the target, behavior is unchanged — template selection uses native audit findings only, or runs all templates if no findings are present.
+- **`build_server`** — Constructs a dynamic MCP server that registers payloads as live tools
+- **Library CLI** — `python -m q_ai.inject serve` / `list-payloads`
 
 ## Next Steps
 
-- [Inject CLI](/inject/cli) — Commands for serving payloads and running campaigns
+- [Inject CLI](/inject/cli) — Serve fixtures and list payloads
 - [Payload Catalog](/inject/payloads) — Available payloads and technique reference
-- [Campaign Execution](/inject/campaigns) — Running campaigns and interpreting results

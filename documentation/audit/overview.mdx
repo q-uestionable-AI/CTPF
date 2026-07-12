@@ -3,6 +3,12 @@ title: Overview
 description: Automated MCP server security scanning mapped to OWASP MCP Top 10, MITRE ATLAS, CWE, and OWASP Agentic Top 10
 ---
 
+<Note>
+**Library / research fixture (Phase 1).** Audit is not a root `qai` CLI pillar
+after the CTPF reconnect shape cut. Use package imports or module entry points —
+not `qai audit`. The public CLI center is [`qai proxy`](/proxy/overview).
+</Note>
+
 The audit module scans MCP servers by enumerating exposed tools, resources, and prompts, then running security checks mapped to the OWASP MCP Top 10, MITRE ATLAS, CWE, and OWASP Agentic Top 10. It produces structured findings with severity ratings and remediation guidance.
 
 ## What It Tests
@@ -62,7 +68,7 @@ Mappings enable integration with your existing security tools and compliance wor
 
 ## What to Expect
 
-Audit is automated. Run `qai audit scan`, select scanners (or run all), and get a structured report. No manual iteration, no payload crafting. Scanners can be individually selected via `--checks`. New scanners can be added by subclassing `BaseScanner` and registering in the scanner registry.
+Audit scanning is automated once invoked as a library: select scanners (or run all), and get a structured report. No manual iteration, no payload crafting. Scanners can be individually selected. New scanners can be added by subclassing `BaseScanner` and registering in the scanner registry.
 
 ## Next Steps
 

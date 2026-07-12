@@ -1,95 +1,123 @@
 ---
 title: Architecture Overview
-description: Architectural design and module organization of qai
+description: Post–Phase 1 CTPF research harness shape
 ---
 
-qai is a modular, layered system with seven security testing modules unified through a shared core infrastructure. Each module operates independently while leveraging common data storage, configuration, and runtime services.
+q-AI is a local Python **CTPF research harness** with one public operator entry point:
+the `qai` CLI. This page matches the durable invariants in the repo
+[`docs/Architecture.md`](https://github.com/q-uestionable-AI/qai/blob/main/docs/Architecture.md)
+after the Phase 1 shape cut.
 
-## Architecture Layers
+## System shape
 
-**Web UI Layer** — FastAPI application server with HTMX for dynamic interactions, Jinja2 server-side rendering, and WebSocket channels for real-time run status and IPI hit notifications. Launched by running `qai ui`.
+**Centered substrate:**
 
-**Orchestrator Layer** — Workflow registry, WorkflowRunner for background task execution, module adapters for lifecycle management. Manages parent/child run relationships and cross-module coordination.
+| Area | Responsibility |
+| --- | --- |
+| `proxy` | Capture, intercept, live modify, export MCP traffic (Textual TUI) |
+| `mcp` | MCP transports and sessions (stdio, SSE, streamable HTTP) |
+| `core` | Shared models, SQLite persistence, config, credentials, providers |
 
-**Service Layer** — Typed query functions in `q_ai.services` (finding_service, run_service, evidence_service). Sits between the orchestrator/web layers and the core DB. Used by adapters for cross-module data queries (e.g., inject adapter querying audit findings) and by route handlers for template context loading.
+**Library modules** (not public CLI pillars; fixtures / research code):
 
-**Module Layer** — Seven security modules (audit, proxy, inject, chain, ipi, cxp, rxp), each with a CLI subcommand (Typer), adapter class for orchestrator integration, and mapper for DB persistence.
+| Area | Responsibility |
+| --- | --- |
+| `audit` | Capability enumeration / scanners; SARIF export |
+| `ipi` | Document generators + headless callback listener |
+| `cxp` | Coding-assistant context-file generators |
+| `inject` | Malicious MCP fixture servers (`build_server` + payload templates) |
 
-**Shared Core Layer** — SQLite database (WAL mode, auto-migrating schema), configuration management (YAML + keyring + DB settings), FrameworkResolver for OWASP MCP Top 10 / MITRE ATLAS / CWE / OWASP Agentic Top 10 mapping, MitigationResolver for structured finding guidance, RunGuidance for deployment playbooks, LLM provider abstraction via litellm.
+**Removed in Phase 1** (do not restore without explicit instruction): Web UI
+(`server/`), `assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, and the
+inject campaign/scoring path.
 
-**MCP Layer** — Shared MCP connection utilities (`q_ai.mcp`) for stdio, SSE, and Streamable HTTP transports. Used by audit, proxy, and inject modules.
-
-## Modules
-
-| Module | Purpose | Key Features |
-|--------|---------|-------------|
-| **audit** | MCP server vulnerability scanning | 10 scanners mapped to OWASP MCP Top 10, multi-format reports (JSON, SARIF, HTML, NDJSON, CSV) |
-| **proxy** | MCP traffic interception | Interactive TUI, session recording, replay against live servers |
-| **inject** | Tool poisoning and prompt injection | Multi-provider campaigns via litellm, NormalizedResponse scoring, evidence preservation |
-| **chain** | Multi-step attack paths | YAML chain definitions, blast radius analysis, detection rule generation (Sigma, Wazuh) |
-| **ipi** | Indirect prompt injection | 7 document formats, callback tracking with confidence scoring, deployment playbooks |
-| **cxp** | Context file poisoning | Coding assistant instruction files, rule catalog, output validation |
-| **rxp** | RAG retrieval poisoning | Embedding model validation, domain profiles, retrieval rate measurement |
-
-## CLI Structure
-
-All modules share a consistent CLI structure via Typer subcommands:
+## Public CLI (transitional)
 
 ```
-qai ui                           # Launch web UI
-qai audit scan                   # Scan an MCP server
-qai audit enumerate              # List server capabilities
-qai inject campaign              # Run injection campaign
-qai ipi generate                 # Generate adversarial documents
-qai ipi listen                   # Start callback listener
-qai chain run                    # Execute attack chain
-qai cxp generate                 # Build poisoned instruction files
-qai rxp validate                 # Measure retrieval rank
-qai import                       # Import external tool findings
-qai runs list                    # View run history
-qai findings list                # View all findings
-qai config set-credential        # Store provider API key
-qai update-frameworks            # Check for upstream framework changes
+qai proxy          # Intercept / modify / export MCP traffic
+qai targets        # Register MCP targets
+qai runs           # Inspect stored runs
+qai findings       # Inspect stored findings
+qai config         # Settings and OS-keyring credentials
+qai db             # Local database maintenance
+qai --version
 ```
 
-## Data Flow
+New verbs such as `inspect` / `evidence` are deferred until a CTPF experiment
+defines a real interface.
 
-1. **Run creation** — User launches a workflow via web UI or CLI. The orchestrator creates a parent run and child runs per module.
-2. **Module execution** — Each module adapter runs its domain logic (scan, campaign, generate, validate). Results persist to SQLite via mapper functions.
-3. **Cross-module queries** — The service layer enables modules to query each other's results. The inject adapter queries audit findings via `finding_service` to prioritize templates. The IPI adapter receives retrieval gates from RXP via the workflow orchestrator.
-4. **Finding emission** — Modules emit findings with severity, category, and framework IDs. The MitigationResolver generates structured remediation guidance per finding.
-5. **Real-time updates** — WebSocket broadcasts run status changes, progress messages, and IPI hit notifications to the web UI.
-6. **Export** — Results export as JSON bundles, SARIF, NDJSON, CSV, or HTML reports.
+Library Typer apps may remain for fixture workflows
+(`python -m q_ai.ipi`, `python -m q_ai.inject`) but are not root `qai` pillars.
 
-## Configuration Precedence
+## Shared backbone
+
+Persistence is a local SQLite database (`~/.qai/qai.db`). The common schema
+centers on `targets`, `runs`, `findings`, `evidence`, and `settings`, with
+additional tables retained for historical module data (proxy sessions, IPI hits,
+legacy chain/inject/RXP tables may still exist for old DBs even when writers are
+gone).
+
+`services/db_service.py` provides shared database helpers used by the
+transitional CLI. Former UI/workflow service helpers were removed with the Web UI
+and orchestrator.
+
+## Boundaries
+
+### Core
+
+`core` owns durable cross-cutting contracts: database access, schema migration,
+shared data models, configuration, credential lookup (OS keyring), and
+provider/model abstractions.
+
+### MCP
+
+`mcp` centralizes client connections to MCP servers. Proxy adapters and other
+callers build on that shared async transport boundary.
+
+### Proxy
+
+`proxy` is the CTPF observation center: bidirectional message capture, optional
+intercept with forward / modify / drop, session persistence, and export. Live
+mutation of server→client tool results is a first-class research path; full
+agent counterfactual replay is not assumed.
+
+### Operator surface
+
+`cli.py` is the only public product surface.
+
+## LLM boundary
+
+Provider-facing code stays behind shared core interfaces (`core.llm`,
+`core.providers`, LiteLLM-backed implementation). Modules that need models
+consume that boundary rather than embedding provider SDKs directly.
+
+## Security and trust invariants
+
+- Any local HTTP listener (IPI headless callback, proxy listen adapters) binds
+  to `127.0.0.1` only — never `0.0.0.0` or external interfaces for product surfaces.
+- API keys go in the OS keyring only — never config files or source code.
+- The IPI callback listener may optionally expose itself via a tunnel adapter
+  (`--tunnel cloudflare`) for testing remote/cloud AI targets, with tunnel-mode
+  hardening documented in the IPI library pages.
+
+## Configuration precedence
 
 ```
 CLI flags (highest priority)
   → Environment variables
-    → Database settings (via Settings UI or qai config set)
+    → Database settings (qai config)
       → YAML config file (~/.qai/config.yaml)
         → Built-in defaults (lowest priority)
 ```
 
-Credentials follow a separate chain: environment variable → OS keyring → error.
+Credentials follow a separate chain: environment variable → OS keyring → error
+(prefer keyring for durable storage).
 
-## Key Infrastructure Components
+## Next steps
 
-**FrameworkResolver** — Loads `frameworks.yaml`, maps assessment categories to OWASP MCP Top 10, MITRE ATLAS, CWE, and OWASP Agentic Top 10 technique IDs. Used by audit findings and displayed as pill badges in the web UI.
-
-**MitigationResolver** — Generates structured, tiered remediation guidance for findings. Loads `mitigations.yaml` covering all 10 OWASP MCP categories. Per-section provenance tracking.
-
-**RunGuidance** — Per-run deployment playbooks generated by IPI and CXP module adapters. Contains ordered GuidanceBlocks (inventory, trigger prompts, deployment steps, monitoring/interpretation).
-
-**Provider Registry** — Manages LLM providers for inject campaigns and chain execution. Supports cloud providers (Anthropic, OpenAI, Groq, OpenRouter) and local providers (Ollama, LM Studio) via litellm. Credentials stored in OS keyring.
-
-**Bridge Token** — Shared secret at `~/.qai/bridge.token` for IPI callback listener ↔ web UI communication. Auto-generated on first use, no expiry.
-
-**WorkflowRunner** — Manages background task execution, parent/child run lifecycle, and WebSocket event broadcasting.
-
-## Next Steps
-
-- [Core Infrastructure](/architecture/core) — Database, configuration, and shared models
-- [Audit Module](/architecture/audit-module) — Scanner architecture and reporting
-- [Inject Module](/architecture/inject-module) — Multi-provider campaign execution
-- [IPI Module](/architecture/ipi-module) — Document generation and callback tracking
+- [Core Infrastructure](/architecture/core) — Database, configuration, shared models
+- [Proxy Module](/architecture/proxy-module) — Observation and intercept
+- [Audit Module](/architecture/audit-module) — Library scanners and reporting
+- [Inject Module](/architecture/inject-module) — Fixture servers
+- [IPI Module](/architecture/ipi-module) — Document generation and callbacks
+- [CXP Module](/architecture/cxp-module) — Context-file fixtures

@@ -3,9 +3,16 @@ title: "CXP Overview"
 description: "Understand coding assistant instruction poisoning and how to test for vulnerabilities"
 ---
 
+<Note>
+**Library / research fixture (Phase 1).** CXP is not a root `qai` CLI pillar
+after the CTPF reconnect shape cut. It targets **coding assistants under test**
+(Cursor, Copilot, Claude Code, etc.) — not the removed product Assist module.
+The public CLI center is [`qai proxy`](/proxy/overview).
+</Note>
+
 # CXP Module
 
-Coding assistant Poisoning (CXP) is a research harness for testing whether coding assistants can be manipulated through malicious instruction files. CXP generates poisoned context files, builds test repositories, and validates whether the assistant followed the injected instructions.
+Coding assistant Poisoning (CXP) is a research library for testing whether coding assistants can be manipulated through malicious instruction files. CXP generates poisoned context files, builds test repositories, and validates whether the assistant followed the injected instructions.
 
 ## What to Expect
 
