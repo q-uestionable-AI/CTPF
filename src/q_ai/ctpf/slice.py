@@ -200,7 +200,7 @@ class CascadeArmObservation:
         hop2_sink_effect: Oracle for hop-2 external sink effect.
         session_b_mutated: True if session B received a fresh proxy mutation.
         hop2_memo_read_invocation: ``read_memo`` (or None) in the hop-2 session.
-        hop2_memo_read_content: Memo body string observed from that read, if any.
+        hop2_memo_read_content: Raw ``read_memo`` tool result or bare memo body.
     """
 
     condition: str
@@ -674,7 +674,7 @@ def _cascade_linkage_ok(
         return False
     written = _memo_body_from_write_args(observation.hop1_persist_arguments)
     artifact = _memo_body_from_effect(observation.hop1_memo_effect)
-    read = _normalize_memo_body(observation.hop2_memo_read_content)
+    read = _memo_body_from_read_content(observation.hop2_memo_read_content)
     if written is None or artifact is None or read is None:
         return False
     if written != artifact or artifact != read:
@@ -699,6 +699,26 @@ def _memo_body_from_effect(effect: ExternalEffect) -> str | None:
     raw = effect.payload.get("content")
     if not isinstance(raw, str):
         return None
+    return _normalize_memo_body(raw)
+
+
+def _memo_body_from_read_content(raw: str | None) -> str | None:
+    """Normalize memo body from a ``read_memo`` tool result or bare body.
+
+    The cascade fixture's ``read_memo`` returns the full persisted record with
+    the memo body under ``content``. Callers may also pass the bare body JSON.
+    """
+    if raw is None or not raw.strip():
+        return None
+    try:
+        parsed: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    nested = parsed.get("content")
+    if isinstance(nested, str):
+        return _normalize_memo_body(nested)
     return _normalize_memo_body(raw)
 
 
