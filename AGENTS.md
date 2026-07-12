@@ -1,12 +1,12 @@
 # q-AI — Agent Context
 
-**SSOT for coding agents in this repo.** (`CLAUDE.md` was removed; do not recreate it.)
+**Repository-local instructions for coding agents.** Do not create a parallel `CLAUDE.md`
+or other second agent-instruction file.
 
-q-AI (`q-uestionable-ai` on PyPI, CLI `qai`) is a security research tool for agentic AI.
-Product direction is **CTPF Reconnect**: lean CLI research harness for Capability Trust
-Propagation Failure — shape-first removal of the old seven-module platform, then causal
-Pattern 2 experiments via MCP proxy observation. Program context lives outside this repo
-(lab vault: plan, handoff, boards). Do not invent a parallel roadmap inside the repo.
+q-AI (`q-uestionable-ai` on PyPI, CLI `qai`) is a security research tool for agentic AI
+and a lean research harness for Capability Trust Propagation Failure (CTPF). Durable program
+guidance lives in the lab vault `qai/Project Instructions.md`; current sequence and progress
+live in the active plan and boards. Do not invent a parallel roadmap inside the repo.
 
 ## Critical Context
 
