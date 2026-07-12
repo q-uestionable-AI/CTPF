@@ -31,46 +31,6 @@
         ]
       },
       {
-        "group": "Web UI",
-        "pages": [
-          "web-ui/overview",
-          "web-ui/launcher",
-          "web-ui/runs",
-          "web-ui/intel",
-          "web-ui/admin"
-        ]
-      },
-      {
-        "group": "Assistant",
-        "pages": [
-          "assist/overview",
-          "assist/configuration",
-          "assist/cli",
-          "assist/knowledge-base",
-          "assist/trust-boundaries"
-        ]
-      },
-      {
-        "group": "Audit",
-        "pages": [
-          "audit/overview",
-          "audit/cli",
-          "audit/scanners",
-          "audit/framework-coverage",
-          "audit/sarif-output",
-          "audit/fixtures"
-        ]
-      },
-      {
-        "group": "Inject",
-        "pages": [
-          "inject/overview",
-          "inject/cli",
-          "inject/payloads",
-          "inject/campaigns"
-        ]
-      },
-      {
         "group": "Proxy",
         "pages": [
           "proxy/overview",
@@ -81,16 +41,36 @@
         ]
       },
       {
-        "group": "Chain",
+        "group": "Database & Targets",
         "pages": [
-          "chain/overview",
-          "chain/cli",
-          "chain/templates"
+          "cli/db",
+          "cli/targets",
+          "cli/runs",
+          "cli/findings"
         ]
       },
       {
-        "group": "IPI — Indirect Prompt Injection",
+        "group": "Configuration",
         "pages": [
+          "config/providers",
+          "config/transports",
+          "config/callback-server",
+          "config/dangerous-payloads",
+          "config/environment-variables"
+        ]
+      },
+      {
+        "group": "Libraries",
+        "pages": [
+          "audit/overview",
+          "audit/cli",
+          "audit/scanners",
+          "audit/framework-coverage",
+          "audit/sarif-output",
+          "audit/fixtures",
+          "inject/overview",
+          "inject/cli",
+          "inject/payloads",
           "ipi/overview",
           "ipi/cli",
           "ipi/techniques",
@@ -98,33 +78,13 @@
           "ipi/templates",
           "ipi/payloads",
           "ipi/callbacks",
-          "ipi/deployment-playbook"
-        ]
-      },
-      {
-        "group": "CXP — Context File Poisoning",
-        "pages": [
+          "ipi/deployment-playbook",
           "cxp/overview",
           "cxp/cli",
           "cxp/objectives",
           "cxp/assistant-formats",
           "cxp/validation",
           "cxp/deployment-playbook"
-        ]
-      },
-      {
-        "group": "RXP — RAG Retrieval Poisoning",
-        "pages": [
-          "rxp/overview",
-          "rxp/cli",
-          "rxp/models-profiles",
-          "rxp/interpretive-bands"
-        ]
-      },
-      {
-        "group": "External Tool Import",
-        "pages": [
-          "imports/overview"
         ]
       },
       {
@@ -139,39 +99,61 @@
         ]
       },
       {
-        "group": "Configuration",
-        "pages": [
-          "config/providers",
-          "config/transports",
-          "config/callback-server",
-          "config/dangerous-payloads",
-          "config/environment-variables"
-        ]
-      },
-      {
-        "group": "Database & Targets",
-        "pages": [
-          "cli/db",
-          "cli/targets",
-          "cli/runs"
-        ]
-      },
-      {
         "group": "Architecture",
         "pages": [
           "architecture/overview",
           "architecture/core",
-          "architecture/audit-module",
           "architecture/proxy-module",
+          "architecture/audit-module",
           "architecture/inject-module",
-          "architecture/chain-module",
           "architecture/ipi-module",
-          "architecture/cxp-module",
-          "architecture/rxp-module"
+          "architecture/cxp-module"
         ]
       }
     ]
   },
+  "redirects": [
+    {
+      "source": "/web-ui/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/assist/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/chain/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/rxp/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/imports/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/inject/campaigns",
+      "destination": "/inject/overview",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/chain-module",
+      "destination": "/architecture/overview",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/rxp-module",
+      "destination": "/architecture/overview",
+      "permanent": true
+    }
+  ],
   "footer": {
     "socials": {
       "github": "https://github.com/q-uestionable-AI/qai",
@@ -180,7 +162,7 @@
   },
   "metadata": {
     "og:site_name": "{q-AI} Docs",
-    "og:description": "Security testing for agentic AI"
+    "og:description": "CTPF research harness — MCP observation, controlled fixtures, and evidence"
   },
   "seo": {
     "metatags": {

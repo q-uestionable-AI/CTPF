@@ -147,35 +147,13 @@ The web UI renders these blocks as collapsible cards in the IPI and CXP run resu
 
 ## Service Layer
 
-The `q_ai.services` package provides typed query functions that sit between the web/orchestrator layers and the core database. Services encapsulate query logic and return typed dataclass results.
-
-| Service | Purpose |
-|---------|---------|
-| `finding_service` | List findings with filters, get finding with evidence, get findings for a run (including child runs), get imported findings for a target |
-| `run_service` | Get run, list runs, get child runs, get finding counts |
-| `evidence_service` | List evidence by finding or run, get content |
-
-Services are used by:
-- **Module adapters** — the inject adapter calls `finding_service.get_findings_for_run()` and `finding_service.get_imported_findings_for_target()` to inform template selection
-- **Web route handlers** — replacing inline DB queries with service calls for findings, runs, and evidence display
-- **Workflow orchestrators** — querying cross-module results during workflow execution
-
+The `q_ai.services` package retains database management helpers used by the
+core CLI (`db_service`: backup, reset, delete). Workflow, run, finding, audit,
+evidence, and managed-listener services were removed in Phase 1b.
 ## External Tool Import
 
-The `q_ai.imports` package provides parsers for external security tool results. Each parser reads a tool-specific format and produces normalized `ImportedFinding` objects with taxonomy bridging.
-
-| Component | Purpose |
-|-----------|---------|
-| `imports/cli.py` | `qai import` CLI command with `--format`, `--target`, `--dry-run` |
-| `imports/garak.py` | Garak JSONL report parser |
-| `imports/pyrit.py` | PyRIT JSON conversation export parser |
-| `imports/sarif.py` | SARIF 2.1.0 generic parser |
-| `imports/taxonomy.py` | OWASP LLM Top 10 → qai category bridge with confidence levels |
-| `imports/models.py` | `ImportedFinding`, `ImportResult`, `TaxonomyBridge` dataclasses |
-
-Import runs are stored with `module='import'` and `source` set to the tool name (garak, pyrit, sarif). The `--target` flag associates imported findings with a qai target, enabling them to inform inject template selection in workflows.
-
-See [External Tool Import](/imports/overview) for CLI usage and parser details.
+Removed in Phase 1. The `q_ai.imports` package and `qai import` CLI are gone.
+Do not expect External Tool Import workflows in current releases.
 
 ## Bridge Token
 

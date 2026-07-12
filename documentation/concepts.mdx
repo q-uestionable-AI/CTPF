@@ -1,15 +1,39 @@
 ---
 title: Core Concepts
-description: MCP protocol, OWASP mapping, module methodologies, and threat model
+description: MCP threat model, CTPF framing, and libraries vs public CLI
 ---
 
 ## What is MCP?
 
 The **Model Context Protocol (MCP)** is an open standard that lets AI agents communicate with external tools and data sources through a client-server architecture. An MCP **client** (the AI agent or its host) connects to one or more MCP **servers**, each of which exposes **tools** (callable functions), **resources** (readable data), and **prompts** (reusable templates). Because MCP servers execute real actions — running commands, querying databases, writing files — they are a direct attack surface for agent infrastructure.
 
+## CTPF framing
+
+**Capability Trust Propagation Failure (CTPF)** asks whether trust properties
+(provenance, integrity, authorization scope, intended audience) fail to propagate
+across capability boundaries in multi-step AI systems.
+
+In this harness, the **proxy** is the primary observation surface: capture MCP traffic,
+optionally mutate server→client tool results under control, and retain sessions as
+evidence. Experiments confirm or fail to observe promotion under pinned conditions.
+They do not claim to falsify CTPF as a class.
+
+Do not invent Pattern 2 how-to workflows here — experiment procedures live with the
+research program outside this docs tree.
+
+## Libraries vs public CLI
+
+| Surface | Role |
+|---------|------|
+| **Public CLI** | `qai proxy`, `targets`, `runs`, `findings`, `config`, `db` |
+| **Libraries** | `audit`, `inject`, `ipi`, `cxp` — fixtures and research code; not root pillars |
+
+Removed Phase 1 surfaces (do not document as current product): Web UI, Assistant,
+Chain, RXP, External Tool Import, inject campaigns.
+
 ## OWASP MCP Top 10
 
-The [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) is a vulnerability taxonomy for MCP-based systems, maintained by the OWASP Foundation. q-ai maps all audit findings to these categories.
+The [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) is a vulnerability taxonomy for MCP-based systems. The audit **library** can map findings to these categories.
 
 | ID | Vulnerability |
 |------|--------------|
@@ -24,23 +48,23 @@ The [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) is a vulnerabi
 | MCP09 | Shadow MCP Servers |
 | MCP10 | Context Injection & Over-Sharing |
 
-## Framework Mapping
+## Framework mapping
 
-All audit findings map to four security frameworks:
+When using the audit library, findings can map to four frameworks:
 
 ### OWASP Agentic Top 10
 
-The [OWASP Agentic Top 10](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) addresses vulnerabilities in agentic AI systems. q-ai findings map to the Agentic Top 10 categories, providing guidance for securing broader AI agent deployments.
+The [OWASP Agentic Top 10](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) addresses vulnerabilities in agentic AI systems.
 
 ### MITRE ATLAS
 
-[MITRE ATLAS](https://atlas.mitre.org/) (Adversarial Threat Landscape for AI Systems) catalogs tactics and techniques observed in real-world attacks on AI systems. q-ai maps audit findings to technique-level ATLAS IDs, providing a cross-reference between MCP-specific vulnerabilities and the broader adversarial ML threat landscape.
+[MITRE ATLAS](https://atlas.mitre.org/) catalogs tactics and techniques observed in real-world attacks on AI systems.
 
 ### CWE
 
-q-ai maps findings to relevant CWE (Common Weakness Enumeration) IDs for vulnerability classification and tracking.
+Findings can map to relevant CWE (Common Weakness Enumeration) IDs for classification and tracking.
 
-See [Framework Coverage](/audit/framework-coverage) for the full mapping tables across all four frameworks.
+See [Framework Coverage](/audit/framework-coverage) for mapping tables.
 
 ## Transport types
 
@@ -52,118 +76,54 @@ MCP defines three transport mechanisms for client-server communication.
 | **SSE** | Server-Sent Events over HTTP (legacy transport) | Remote servers using the older SSE-based MCP protocol |
 | **Streamable HTTP** | Bidirectional HTTP transport (current standard) | Remote servers using the current MCP transport specification |
 
-See [Transport Types](/config/transports) for configuration details per module.
+See [Transport Types](/config/transports) for configuration details.
 
 ## Threat model
 
-q-ai tests **agent infrastructure** — the servers, tools, and trust boundaries that AI agents interact with — not just model outputs. The assumption is that MCP servers are untrusted components: they may leak secrets, execute injected commands, poison tool descriptions, or over-share context across sessions.
+q-AI tests **agent infrastructure** — the servers, tools, and trust boundaries that AI agents interact with — not just model outputs. The assumption is that MCP servers and tool results are untrusted components: they may leak secrets, execute injected commands, poison tool descriptions, or over-share context across sessions.
 
-## Module methodologies
+Proxy observation asks what happens when that untrusted content crosses into a higher-trust action path without preserved provenance or scope.
 
-### Audit, Proxy, Inject, Chain — MCP infrastructure testing
+## Library methodologies (fixtures)
 
-The **audit** module scans MCP servers by enumerating exposed tools, resources, and prompts, then running security checks mapped to the OWASP MCP Top 10. **Proxy** intercepts live MCP traffic between client and server for inspection and replay. **Inject** tests whether AI agents comply with poisoned tool descriptions. **Chain** composes multi-step attack sequences across modules.
+### Proxy — Observe and mutate
 
-### IPI — Generate, Deploy, Track
+Sit between a client you control and an MCP server. Capture traffic, optionally intercept with forward / modify / drop, export sessions. This is the CTPF center of the public CLI.
 
-IPI has an active attack chain with callback-based proof of execution:
+### Audit — Enumerate and scan (library)
 
-1. **Generate** — Create documents with hidden payloads, registered as campaigns with unique tokens
-2. **Deploy** — Place payloads where the target AI will ingest them
-3. **Track** — The callback listener captures HTTP requests from agents that execute the instruction
+Connect to a server, enumerate tools/resources/prompts, run scanners mapped to OWASP MCP categories, export structured reports (including SARIF). Invoked as library code — not `qai audit`.
 
-Unlike output-analysis approaches that inspect what an AI *says*, IPI proves what an AI *does* by detecting out-of-band callbacks triggered by hidden instructions.
+### Inject — Fixture servers (library)
 
-### CXP — Build, Test, Record
+Serve malicious MCP tools via `build_server` / `python -m q_ai.inject`. Campaign scoring paths are removed.
 
-CXP is a research harness where the researcher drives the test:
+### IPI — Generate and listen (library)
 
-1. **Build** — Select insecure coding rules from the YAML rule catalog and assemble a context file from clean base templates + the selected rules
-2. **Test** — Open the generated repo in a coding assistant, issue a trigger prompt, capture the output
-3. **Record** — Store results in the evidence pipeline with validation against detection rules
+Generate adversarial documents and run a headless callback listener (`python -m q_ai.ipi`) for out-of-band proof of execution when authorized.
 
-### RXP — Embed, Query, Score
+### CXP — Context file fixtures (library)
 
-RXP measures retrieval behavior without connecting to live systems:
+Build poisoned instruction files for coding assistants and validate captured assistant output against detection rules. This targets **coding assistants under test**, not a removed product “Assist” module.
 
-1. **Embed** — Encode corpus and poison documents into vectors using an embedding model
-2. **Query** — Run target queries and retrieve top-k results from an ephemeral collection
-3. **Score** — Measure poison document retrieval rate and rank across models
+## Callback-based verification (IPI library)
 
-RXP validates the retrieval prerequisite for content injection — if a poisoned document doesn't appear in the top-k results, it never reaches the LLM context window.
+IPI payloads can embed a unique callback URL containing a cryptographic token. When an agent executes the hidden instruction, it may fire an HTTP request to the listener. Confidence scoring distinguishes token-backed hits from noise.
 
-## Callback-based verification
+Local listeners bind to `127.0.0.1` only. Optional tunnel mode for remote targets is documented under [IPI callbacks](/ipi/callbacks).
 
-Each IPI campaign generates a unique callback URL containing a cryptographic token:
+## Payload styles vs payload types (IPI)
 
-```
-http://<listener>:8080/c/<campaign-uuid>/<token>
-```
+**Payload styles** control how the injection blends into document content (`obvious`, `citation`, `reviewer`, etc.).
 
-When an AI agent executes the hidden instruction, it fires an HTTP request to this URL. The listener records the hit and assigns a confidence level:
+**Payload types** define the instructed action (`callback`, exfil variants, SSRF, instruction override, tool abuse, persistence). Dangerous types require an explicit `--dangerous` flag — see [Dangerous Payloads](/config/dangerous-payloads).
 
-| Confidence | Criteria | Interpretation |
-|------------|----------|----------------|
-| **HIGH** | Valid campaign token present | Strong proof of agent execution — the token could only have come from the specific payload |
-| **MEDIUM** | No/invalid token, but programmatic User-Agent (python-requests, httpx, curl, etc.) | Likely agent execution, but without token proof |
-| **LOW** | No/invalid token and browser/scanner User-Agent | Noise — likely a human click, web crawler, or port scanner |
+## Surface summary
 
-The listener returns a fake 404 response to avoid alerting the target system that the payload was successfully executed.
-
-## Payload styles vs payload types
-
-q-ai separates *how* a payload is hidden from *what* it instructs the agent to do.
-
-**Payload styles** control how the injection instruction blends into the document content. Styles range from `obvious` (direct injection markers for baseline testing) to subtle social-engineering approaches like `citation`, `reviewer`, `academic`, `compliance`, and `datasource` that disguise the instruction as legitimate document content.
-
-**Payload types** define the action the agent is instructed to perform:
-
-- `callback` — Fire an HTTP request to the listener (proof of execution)
-- `exfil_summary`, `exfil_context` — Exfiltrate data to the listener
-- `ssrf_internal` — Server-side request forgery to internal endpoints
-- `instruction_override` — Override the agent's system instructions
-- `tool_abuse` — Misuse agent tools and capabilities
-- `persistence` — Persist instructions across sessions
-
-## Dangerous payload gating
-
-Payload types are divided into two safety tiers:
-
-- **Always available:** `callback` — benign proof-of-execution that only fires an HTTP GET
-- **Requires `--dangerous` flag:** All other payload types (exfil, SSRF, instruction override, tool abuse, persistence)
-
-```bash
-# Safe — callback only
-qai ipi generate --callback http://localhost:8080
-
-# Dangerous — requires explicit flag
-qai ipi generate --callback http://localhost:8080 \
-  --payload-type exfil_summary --dangerous
-```
-
-## q-ai modules
-
-| Module | Attack Surface | What It Tests | How It Proves Results |
-|--------|---------------|---------------|----------------------|
-| **audit** | MCP server capabilities | Whether servers expose vulnerabilities mapped to the OWASP MCP Top 10 | Structured findings with severity, evidence, and remediation |
-| **proxy** | MCP client-server traffic | What data flows between agents and servers | Recorded sessions with message-level detail |
-| **inject** | MCP tool descriptions | Whether AI agents comply with poisoned tool descriptions | Model response analysis with compliance scoring |
-| **chain** | Multi-module attack paths | Whether vulnerabilities can be composed into attack chains | Step-by-step execution trace with success/failure |
-| **ipi** | Document ingestion | Whether AI agents execute hidden instructions in uploaded documents | Out-of-band HTTP callback from the agent |
-| **cxp** | Project instruction files | Whether poisoned instruction files influence coding assistant code generation | Detection rule validation against captured assistant output |
-| **rxp** | RAG retrieval layer | Whether adversarial documents appear in top-k retrieval results | Retrieval rate and poison rank scoring across embedding models |
-
-## Interpret prompts
-
-Every report and export output includes a `prompt` field containing an AI-evaluation prompt. This prompt summarizes the structured findings in natural language and can be fed directly to an LLM for automated analysis, triage recommendations, or follow-on testing priorities.
-
-| Module | What the prompt summarizes |
-|--------|---------------------------|
-| **audit** | Target server, tools scanned, findings by severity, OWASP categories |
-| **inject** | Target model, techniques used, compliance outcomes |
-| **chain** | Step count, modules used, trust boundaries crossed, success/failure path |
-| **ipi** | Campaign count, formats, techniques, callback hit rate |
-| **cxp** | Techniques, objectives, assistants tested, outcome distribution |
-| **rxp** | Embedding model, query count, retrieval rate, mean poison rank |
-
-The prompt appears as `"prompt"` in JSON output, `"interpretPrompt"` in SARIF, and as an expandable analyst context section in HTML reports.
+| Area | Attack / observation surface | Role after Phase 1 |
+|------|------------------------------|--------------------|
+| **proxy** | MCP client↔server traffic | Public CLI center |
+| **audit** | MCP server capabilities | Library |
+| **inject** | Malicious MCP fixtures | Library (`build_server`) |
+| **ipi** | Document ingestion + callbacks | Library (`python -m q_ai.ipi`) |
+| **cxp** | Coding-assistant instruction files | Library |

@@ -1,9 +1,9 @@
 ---
 title: "Proxy Overview"
-description: "Intercept, inspect, and replay MCP traffic for security testing and regression analysis"
+description: "CTPF observation — intercept, inspect, mutate, and export MCP traffic"
 ---
 
-The Proxy module provides transparent interception of Model Context Protocol (MCP) traffic, enabling you to inspect tool calls, modify messages in flight, and replay sessions for regression testing.
+The Proxy module is the **CTPF observation center**: transparent interception of Model Context Protocol (MCP) traffic so you can inspect tool calls, modify messages in flight under control, and export sessions for evidence.
 
 ## When to Use the Proxy
 
@@ -11,16 +11,16 @@ The proxy is a **client-side interception tool**. It sits between an MCP client 
 
 This means the proxy works when:
 
-- **qai is the MCP client.** When running `qai audit scan` or `qai inject` against a remote MCP server, qai itself opens the MCP connection. The proxy can intercept qai's own traffic to the target server — no target modification required. This is the primary use case for offensive testing.
-- **You control the MCP client.** If you're assessing your own MCP setup — your own Claude Desktop configuration, your own Cursor instance, your own agent framework — you can configure your client to route through the proxy for self-assessment or debugging.
+- **You control the MCP client.** Configure Claude Desktop, Cursor, an agent framework, or other MCP clients you operate to route through the proxy for observation, self-assessment, or debugging.
+- **Library tooling drives a client you control.** Research fixtures (for example inject fixture servers or custom clients) may open MCP connections that you can point through the proxy. The proxy does not depend on removed root commands such as `qai audit` or `qai inject`.
 
-The proxy does **not** work when the MCP client belongs to the target. If you're testing whether a platform like LibreChat or Dify follows injected instructions from a poisoned document, the platform's internal MCP client makes the tool calls — and you can't configure that client without modifying the target. In those scenarios, use other evidence sources (IPI callbacks, agent response content, conversation logs) instead of proxy capture.
+The proxy does **not** work when the MCP client belongs to the target. If a remote platform's internal MCP client makes the tool calls, you cannot configure that client without modifying the target. In those scenarios, use other evidence sources (IPI callbacks, agent response content, conversation logs) instead of proxy capture.
 
 <Note>
 Once positioned in the traffic path, the proxy lets you:
 - **Inspect tool calls** — See exactly which tools are being invoked and with what parameters
-- **Modify messages** — Alter requests or responses mid-session for manual testing
-- **Replay sessions** — Re-send captured messages against different server implementations to test compatibility or reproduce findings
+- **Modify messages** — Alter requests or responses mid-session for controlled CTPF experiments
+- **Replay sessions** — Re-send captured messages against different server implementations
 - **Drop messages** — Intercept and discard specific tool invocations during manual testing
 </Note>
 
@@ -44,7 +44,7 @@ The proxy operates as a transparent man-in-the-middle positioned between your cl
 - Messages are paused and held for user inspection
 - User can FORWARD unchanged, MODIFY with edits, or DROP entirely
 - Interactive TUI-based control
-- Useful for targeted analysis of specific interactions
+- Useful for targeted analysis of specific interactions — including live mutation of server→client tool results
 
 ## Transport Support
 
@@ -56,24 +56,18 @@ The proxy bridges three MCP transports:
 
 ## Typical Workflow
 
-1. Start the proxy with your target server details and optionally enable intercept mode
+1. Start the proxy with your target server details and optionally enable intercept mode (`qai proxy`)
 2. Configure the MCP client you control to connect to the proxy instead of directly to the target server
 3. Watch messages in real-time via the interactive TUI
 4. Toggle intercept mode to halt and inspect specific interactions
 5. Forward, modify, or drop messages as needed
-6. Export the completed session for evidence, testing, or audit purposes
+6. Export the completed session for evidence or later analysis
 
 ## What to Expect
 
-Proxy is interactive. It captures and replays traffic but does not produce findings or vulnerability assessments. The researcher observes, inspects, and optionally modifies messages in real time. Session recordings provide evidence for later analysis, but the analysis itself is manual.
+Proxy is interactive. It captures and replays traffic but does not produce automated vulnerability findings. The researcher observes, inspects, and optionally modifies messages in real time. Session recordings provide evidence for later analysis; the analysis itself is manual.
 
-## Chain Correlation
-
-The proxy data model supports chain correlation via `chain_run_id` and `chain_step_id` fields on the proxy session. When populated, these enable post-execution analysis: for any chain step that involved MCP traffic through the proxy, you can find the corresponding captured messages and correlate network behavior with specific attack chain steps.
-
-<Note>
-Chain correlation fields are stored and persisted by the proxy's `SessionStore` and mapper, but must be explicitly passed when creating a session. Automatic propagation from the chain executor to the proxy adapter is not yet wired — if you need chain-tagged sessions, pass the chain context when constructing `SessionStore`.
-</Note>
+Live mutation of server→client tool results is a first-class research path. Full agent counterfactual replay is not assumed.
 
 ## Next Steps
 

@@ -3,16 +3,22 @@ title: Overview
 description: Test AI agent indirect prompt injection vulnerabilities through document poisoning and callback tracking
 ---
 
+<Note>
+**Library / research fixture (Phase 1).** IPI is not a root `qai` CLI pillar.
+Run the headless listener and generators via `python -m q_ai.ipi` (not
+`qai ipi`). The public CLI center is [`qai proxy`](/proxy/overview).
+</Note>
+
 ## What Is IPI?
 
-Indirect Prompt Injection (IPI) is a security testing module that lets you test whether AI systems are vulnerable to hidden instructions embedded in external documents. You create adversarial documents, deploy them to a target system, and track execution via HTTP callbacks — proof that the hidden payload actually ran.
+Indirect Prompt Injection (IPI) is a research library that lets you test whether AI systems are vulnerable to hidden instructions embedded in external documents. You create adversarial documents, deploy them to a target system, and track execution via HTTP callbacks — proof that the hidden payload actually ran.
 
-IPI is the only qai module where documents are uploaded to third-party AI services. **This requires explicit authorization.**
+IPI is the surface where documents may be uploaded to third-party AI services. **This requires explicit authorization.**
 
 ## How It Works
 
-1. **Start the callback listener** — Run `qai ipi listen` on a server you control. This opens an HTTP endpoint that receives proof-of-execution callbacks. The listener can also run with `--tunnel cloudflare` to receive callbacks from cloud / remote targets — see [Remote callbacks via Cloudflare Tunnel](/ipi/callbacks#remote-callbacks-via-cloudflare-tunnel).
-2. **Generate poisoned documents** — Use `qai ipi generate` to create documents with hidden payloads using your choice of format (PDF, Word, Markdown, etc.) and hiding technique (white ink text, metadata, comments, etc.).
+1. **Start the callback listener** — Run `python -m q_ai.ipi listen` on a host you control. This opens an HTTP endpoint that receives proof-of-execution callbacks. The listener can also run with `--tunnel cloudflare` to receive callbacks from cloud / remote targets — see [Remote callbacks via Cloudflare Tunnel](/ipi/callbacks#remote-callbacks-via-cloudflare-tunnel).
+2. **Generate poisoned documents** — Use `python -m q_ai.ipi generate` to create documents with hidden payloads using your choice of format (PDF, Word, Markdown, etc.) and hiding technique (white ink text, metadata, comments, etc.).
 3. **Deploy to target** — Upload the poisoned document to the target system's document ingestion pipeline (knowledge base, RAG system, email service, calendar app, etc.).
 4. **Trigger payload execution** — Send a prompt that causes the target to ingest and process your document.
 5. **Verify execution** — Monitor your callback listener for HTTP requests. A callback confirms the target executed your hidden payload.
@@ -67,25 +73,13 @@ The callback listener records incoming HTTP requests and assigns a **confidence 
 - **MEDIUM** — No token, but User-Agent indicates a programmatic HTTP client (python-requests, httpx, curl, etc.). Likely automated execution.
 - **LOW** — No token and browser/scanner User-Agent. May be incidental traffic or scanner noise, not definitive proof.
 
-All hits are stored in the database and accessible via `qai ipi status` or the web dashboard.
+All hits are stored in the database and accessible via `python -m q_ai.ipi status`.
 
-## Retrieval Pre-Validation
+## Retrieval pre-validation (removed)
 
-When running through the Test Document Ingestion workflow with RXP enabled, IPI receives retrieval pre-validation results before generating payloads. This prevents generating documents that would never be retrieved by the target RAG system.
-
-Three states are possible:
-
-| State | What Happens |
-|-------|--------------|
-| RXP disabled (default) | IPI generates all payloads — no gating applied |
-| RXP enabled, zero retrieval | IPI skips generation entirely. The run completes with zero payloads and marks all queries as non-viable |
-| RXP enabled, partial or full retrieval | IPI generates all payloads normally. Queries where the poison document was not retrieved are annotated as non-viable in the results |
-
-Generation is not suppressed per-query because IPI generates payloads per format and technique (e.g., one PDF with white_ink technique), not per query. The non-viable query annotations tell you which retrieval paths are weak spots.
-
-When RXP fails or its dependencies are missing, IPI runs ungated — identical to RXP being disabled.
-
-See [RXP → IPI Pipeline](/rxp/overview#rxp--ipi-pipeline) for the full gating model.
+Phase 1 removed the RXP module and the RXP→IPI retrieval gating path. IPI
+generation runs without retrieval pre-validation. Historical docs that referred
+to an RXP pipeline no longer apply.
 
 ## Safety and Authorization
 
@@ -99,15 +93,14 @@ The callback listener returns a spoofed HTTP 404 response to avoid alerting the 
 
 ## Key Components
 
-- **CLI** (`qai ipi` commands) — Generate payloads, manage campaigns, monitor hits
+- **Library CLI** (`python -m q_ai.ipi`) — Generate payloads, manage campaigns, monitor hits
 - **Callback Server** — FastAPI listener that receives and logs execution confirmations
 - **Database** — Stores campaigns, hits, and campaign metadata
-- **Web UI** — IPI tab in run results with live hit feed and deployment playbook (when running through the web UI)
 - **Guidance Builder** — Generates deployment workflows and trigger prompts tailored to your format and target platform
 
 ## Next Steps
 
-- [CLI Reference](/ipi/cli) — All `qai ipi` commands and options
+- [CLI Reference](/ipi/cli) — Library CLI commands and options (`python -m q_ai.ipi`)
 - [Techniques](/ipi/techniques) — Detailed breakdown of all hiding techniques by format
 - [Formats](/ipi/formats) — Implementation status and format-specific capabilities
 - [Templates](/ipi/templates) — Document context templates that frame payloads in realistic content
