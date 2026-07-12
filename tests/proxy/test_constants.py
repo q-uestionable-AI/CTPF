@@ -26,3 +26,14 @@ def test_stdio_subprocess_env_forwards_pattern2_vars(
     assert env["QAI_PATTERN2_RUN_ID"] == "m01"
     assert env["QAI_PATTERN2_RESET_SINK"] == "1"
     assert "PATH" in env
+
+
+def test_stdio_subprocess_env_forwards_cascade_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QAI_CASCADE_* must be forwarded past MCP's default env whitelist."""
+    monkeypatch.setenv("QAI_CASCADE_RUN_ID", "c-m01")
+    monkeypatch.setenv("QAI_CASCADE_RESET", "1")
+    env = stdio_subprocess_env()
+    assert env["QAI_CASCADE_RUN_ID"] == "c-m01"
+    assert env["QAI_CASCADE_RESET"] == "1"
