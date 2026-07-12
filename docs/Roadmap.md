@@ -1,5 +1,10 @@
 # {q-AI} — Roadmap
 
+> **Superseded for product direction (2026-07-11):** CTPF Reconnect governs sequencing.
+> Live plan: lab vault `qai/Plans/CTPF Reconnect Plan.md`. In-repo shape: README +
+> `docs/Architecture.md`. Historical phases below describe the pre-strip platform and
+> should not steer new work.
+
 ## Problem Statement
 
 AI agents are being deployed with broad access to tools, data, and systems — but the security
@@ -228,7 +233,8 @@ template schema. Breaking changes require major version bump after 1.0.
 | MITRE ATLAS | Adversarial ML technique mapping — all 10 categories mapped, verified against ATLAS.yaml v5.4.0 |
 | CWE | Weakness enumeration for SARIF consumers and security tooling — all 10 categories mapped |
 
-Framework mappings are maintained in `src/q_ai/core/data/frameworks.yaml` and kept current via `qai update-frameworks`.
+Framework mappings are maintained in `src/q_ai/core/data/frameworks.yaml` (static;
+the former `qai update-frameworks` updater was removed in the CTPF Reconnect strip).
 
 ---
 
