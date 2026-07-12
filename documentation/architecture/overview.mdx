@@ -57,9 +57,11 @@ additional tables retained for historical module data (proxy sessions, IPI hits,
 legacy chain/inject/RXP tables may still exist for old DBs even when writers are
 gone).
 
-`services/db_service.py` provides shared database helpers used by the
-transitional CLI. Former UI/workflow service helpers were removed with the Web UI
-and orchestrator.
+`core/db.py` provides shared database access used by the transitional CLI
+(`get_connection`, target/run/finding helpers, and the default DB path).
+`services/db_service.py` covers backup, reset, and delete operations only.
+Former UI/workflow service helpers were removed with the Web UI and
+orchestrator.
 
 ## Boundaries
 

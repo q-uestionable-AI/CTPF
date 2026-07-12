@@ -1,0 +1,36 @@
+---
+title: "qai findings"
+description: "List stored security findings"
+---
+
+List findings persisted in the local SQLite database (`~/.qai/qai.db`).
+
+## Commands
+
+### `qai findings list`
+
+List security findings with optional filters.
+
+```bash
+qai findings list [OPTIONS]
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--module` / `-m` | — | Filter by module name. |
+| `--category` / `-c` | — | Filter by category. |
+| `--severity` / `-s` | — | Minimum severity (`INFO`, `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`). |
+| `--target` / `-t` | — | Filter by target ID. |
+| `--limit` / `-n` | 20 | Maximum number of findings to display. |
+
+Displays a table with ID, Module, Category, Severity, Title, and Created timestamp.
+
+**Examples:**
+
+```bash
+qai findings list
+qai findings list --severity HIGH --limit 50
+qai findings list --module proxy --target a1b2c3d4
+```

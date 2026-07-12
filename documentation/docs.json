@@ -45,7 +45,8 @@
         "pages": [
           "cli/db",
           "cli/targets",
-          "cli/runs"
+          "cli/runs",
+          "cli/findings"
         ]
       },
       {
