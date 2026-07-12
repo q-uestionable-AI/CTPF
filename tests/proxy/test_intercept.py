@@ -136,6 +136,21 @@ class TestProgrammaticDecision:
         assert engine.decide(_make_proxy_message()) is expected
 
 
+class TestDropHeld:
+    """InterceptEngine.drop_held() unblocks all waiters with DROP."""
+
+    def test_drop_held_releases_all_with_drop(self) -> None:
+        engine = InterceptEngine(mode=InterceptMode.INTERCEPT)
+        held1 = engine.hold(_make_proxy_message(sequence=1))
+        held2 = engine.hold(_make_proxy_message(sequence=2))
+        engine.drop_held()
+        assert held1.release.is_set()
+        assert held1.action == InterceptAction.DROP
+        assert held2.release.is_set()
+        assert held2.action == InterceptAction.DROP
+        assert len(engine.get_held()) == 0
+
+
 class TestSetMode:
     """InterceptEngine.set_mode() toggles and auto-releases."""
 

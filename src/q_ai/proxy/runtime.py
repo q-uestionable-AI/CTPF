@@ -116,7 +116,12 @@ class ProxyRuntime:
             self._finish()
 
     async def stop(self) -> None:
-        """Close active adapters so the pipeline exits cleanly."""
+        """Drop held intercepts and close adapters so the pipeline exits.
+
+        Closing adapters alone is not enough when a forward loop is awaiting
+        an interactive intercept decision; held messages must be released too.
+        """
+        self._session.intercept_engine.drop_held()
         adapters = [
             adapter
             for adapter in (self._client_adapter, self._server_adapter)

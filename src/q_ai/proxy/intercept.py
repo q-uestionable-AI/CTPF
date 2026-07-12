@@ -165,6 +165,11 @@ class InterceptEngine:
         """
         return list(self._held)
 
+    def drop_held(self) -> None:
+        """Release all held messages with DROP so waiters unblock."""
+        for held in list(self._held):
+            self.release(held, InterceptAction.DROP)
+
     def get_state(self) -> InterceptState:
         """Return a snapshot of the current intercept state.
 

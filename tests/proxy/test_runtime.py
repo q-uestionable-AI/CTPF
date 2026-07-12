@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
 from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCMessage, JSONRPCRequest
 
 from q_ai.mcp.models import Transport
 from q_ai.mcp.transport import TransportClosedError
 from q_ai.proxy.constants import LISTEN_HOST
 from q_ai.proxy.intercept import InterceptEngine
+from q_ai.proxy.models import HeldMessage, InterceptMode
 from q_ai.proxy.pipeline import PipelineSession
 from q_ai.proxy.runtime import (
     ProxyRuntime,
@@ -55,12 +58,23 @@ class QueueAdapter:
         self.read_queue.put_nowait(None)
 
 
-def _make_session() -> PipelineSession:
+def _make_session(
+    *,
+    intercept_mode: InterceptMode = InterceptMode.PASSTHROUGH,
+    on_held: Callable[[HeldMessage], None] | None = None,
+) -> PipelineSession:
     store = SessionStore(session_id=str(uuid.uuid4()), transport=Transport.STDIO)
     return PipelineSession(
         session_store=store,
-        intercept_engine=InterceptEngine(),
+        intercept_engine=InterceptEngine(mode=intercept_mode),
         transport=Transport.STDIO,
+        on_held=on_held,
+    )
+
+
+def _make_request(method: str = "tools/list", msg_id: int = 1) -> SessionMessage:
+    return SessionMessage(
+        message=JSONRPCMessage(JSONRPCRequest(jsonrpc="2.0", id=msg_id, method=method))
     )
 
 
@@ -120,6 +134,33 @@ class TestProxyRuntime:
 
         assert client.entered and client.exited
         assert server.entered and server.exited
+        assert session.session_store.to_proxy_session().ended_at is not None
+        assert not runtime.ready
+
+    async def test_stop_unblocks_held_intercept(self) -> None:
+        held_ready = asyncio.Event()
+
+        def on_held(_held: HeldMessage) -> None:
+            held_ready.set()
+
+        client = QueueAdapter()
+        server = QueueAdapter()
+        session = _make_session(
+            intercept_mode=InterceptMode.INTERCEPT,
+            on_held=on_held,
+        )
+        runtime = ProxyRuntime(session)
+
+        task = asyncio.create_task(runtime.run_with_adapters(client, server))
+        await runtime.wait_until_ready()
+        await client.read_queue.put(_make_request())
+        await asyncio.wait_for(held_ready.wait(), timeout=1.0)
+        assert session.intercept_engine.get_held()
+
+        await runtime.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        assert not session.intercept_engine.get_held()
         assert session.session_store.to_proxy_session().ended_at is not None
         assert not runtime.ready
 
