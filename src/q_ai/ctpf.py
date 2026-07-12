@@ -277,7 +277,7 @@ def write_evidence_bundle(
     """Write a minimal evidence bundle: hashed artifacts + result record.
 
     Args:
-        output_dir: Destination directory (created if missing).
+        output_dir: Destination directory (must not already exist).
         result: Trust-transition record to serialize.
         experiment: Pinned scenario and both experimental arms.
         artifacts: Logical name → source file path to copy into the bundle.

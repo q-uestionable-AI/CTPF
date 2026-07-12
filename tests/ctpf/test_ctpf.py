@@ -355,6 +355,8 @@ def _artifact_sources(tmp_path: Path) -> dict[str, Path]:
 
 
 class TestEvidenceBundle:
+    """Tests for evidence-bundle validation, copying, and serialization."""
+
     def test_preserves_paths_hashes_pins_and_conditions(self, tmp_path: Path) -> None:
         baseline, manipulated = _confirmed_observations()
         transition = compare_baseline_manipulated(baseline, manipulated)
