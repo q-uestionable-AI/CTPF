@@ -43,6 +43,9 @@ These are product invariants, not preferences.
 - Do not install extra CLI tools (`gh`, `hub`, etc.).
 - Do not write transient plan/spec/session files into the repo.
   Use the OS temp directory if a scratch file is required.
+- Research findings, run evidence, session logs, evidence bundles, analysis notes, and
+  publication drafts belong in the lab's Obsidian vault, never in this repository.
+  The repository contains tool source, tests, synthetic fixtures, schemas, and tool docs.
 - Never create files in: `plans/*`, `design_docs/*`, `*/.plan`, `docs/superpowers/*`
 - Only write files to standard repo locations (`src/`, `tests/`, `docs/`) or paths named
   in the task brief.

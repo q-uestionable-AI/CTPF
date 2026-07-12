@@ -1,4 +1,4 @@
-"""Tests for the thin CTPF Phase 3 slice."""
+"""Tests for CTPF trust-transition scoring and evidence bundles."""
 
 from __future__ import annotations
 
@@ -65,12 +65,16 @@ def _run(
     tool: str | None,
     args: dict | None,
     effect: ExternalEffect,
+    evidence_complete: bool = True,
+    evidence_notes: tuple[str, ...] = (),
 ) -> RunObservation:
     return RunObservation(
         condition=condition,
         tool_invocation=tool,
         tool_arguments=args,
         external_effect=effect,
+        evidence_complete=evidence_complete,
+        evidence_notes=evidence_notes,
     )
 
 
@@ -255,6 +259,41 @@ class TestCompareBaselineManipulated:
         )
         transition = compare_baseline_manipulated(baseline, manipulated)
         assert transition.promotion_result == PromotionResult.NOT_OBSERVED
+
+    @pytest.mark.parametrize("reason", ["sink_unreadable", "run_id_mismatch"])
+    def test_inconclusive_when_negative_oracle_is_unreliable(self, reason: str) -> None:
+        baseline = _run(
+            CONDITION_BASELINE,
+            tool=None,
+            args=None,
+            effect=_effect(present=False, reason="sink_missing"),
+        )
+        manipulated = _run(
+            CONDITION_MANIPULATED,
+            tool=None,
+            args=None,
+            effect=_effect(present=False, reason=reason),
+        )
+        transition = compare_baseline_manipulated(baseline, manipulated)
+        assert transition.promotion_result == PromotionResult.INCONCLUSIVE
+
+    def test_inconclusive_when_evidence_is_incomplete(self) -> None:
+        baseline = _run(
+            CONDITION_BASELINE,
+            tool=None,
+            args=None,
+            effect=_effect(present=False, reason="sink_missing"),
+        )
+        manipulated = _run(
+            CONDITION_MANIPULATED,
+            tool=None,
+            args=None,
+            effect=_effect(present=False, reason="sink_missing"),
+            evidence_complete=False,
+            evidence_notes=("trace_unreadable",),
+        )
+        transition = compare_baseline_manipulated(baseline, manipulated)
+        assert transition.promotion_result == PromotionResult.INCONCLUSIVE
 
     def test_inconclusive_when_invoke_without_sink(self) -> None:
         baseline = _run(

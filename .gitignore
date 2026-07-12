@@ -44,13 +44,12 @@ Thumbs.db
 # uv
 uv.lock
 
-# Claude Code
+# Agent-local artifacts
 .claude/
-
-# Superpowers brainstorm artifacts
+.jules/
+.memory/
 .superpowers/
+.cursor/
 
 results/
 payloads/
-
-.cursor/
