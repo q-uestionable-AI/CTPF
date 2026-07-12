@@ -13,6 +13,8 @@ from q_ai.ipi.server import start_server
 from q_ai.ipi.tunnel import TunnelError, get_tunnel_adapter
 
 _LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
+# Cloudflare adapter always forwards to http://localhost:{port}.
+_TUNNEL_TARGET_HOSTS = frozenset({"127.0.0.1", "localhost"})
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -42,6 +44,25 @@ def _require_loopback_host(host: str) -> str:
         return host
     console.print(f"[red]X Refusing to bind IPI listener to non-loopback host {host!r}[/red]")
     console.print("  Bind to 127.0.0.1 (default). For remote callbacks use --tunnel cloudflare.")
+    raise typer.Exit(1)
+
+
+def _require_tunnel_compatible_host(host: str) -> str:
+    """Require tunnel mode to bind the host the adapter forwards to.
+
+    Args:
+        host: Requested bind interface.
+
+    Returns:
+        The original host when it matches the tunnel target.
+
+    Raises:
+        typer.Exit: When the host would miss the tunnel forward target.
+    """
+    if host.strip().lower() in _TUNNEL_TARGET_HOSTS:
+        return host
+    console.print(f"[red]X Tunnel mode requires --host 127.0.0.1 or localhost (got {host!r})[/red]")
+    console.print("  The Cloudflare adapter forwards to http://localhost:<port>.")
     raise typer.Exit(1)
 
 
@@ -145,6 +166,7 @@ def listen(
         start_server(host=host, port=port)
         return
 
+    host = _require_tunnel_compatible_host(host)
     _run_listen_with_tunnel(
         host=host,
         port=port,

@@ -38,6 +38,16 @@ class TestServerDefaults(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("non-loopback", result.output.lower())
 
+    def test_cli_rejects_tunnel_with_mismatched_loopback_host(self):
+        """Tunnel mode must not bind a loopback address cloudflared won't hit."""
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["listen", "--host", "127.0.0.2", "--tunnel", "cloudflare"],
+        )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("127.0.0.1 or localhost", result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

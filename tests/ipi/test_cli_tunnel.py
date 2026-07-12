@@ -94,3 +94,19 @@ class TestListenTunnelFlag:
         mock_start.assert_called_once()
         # tunnel_provider is not passed in the legacy path.
         assert "tunnel_provider" not in mock_start.call_args.kwargs
+
+    def test_tunnel_rejects_loopback_host_not_targeted_by_adapter(self) -> None:
+        """``--host 127.0.0.2 --tunnel`` must exit before starting cloudflared."""
+        with (
+            patch("q_ai.ipi.commands.listen.get_tunnel_adapter") as mock_factory,
+            patch("q_ai.ipi.commands.listen.start_server") as mock_start,
+        ):
+            result = runner.invoke(
+                app,
+                ["listen", "--host", "127.0.0.2", "--tunnel", "cloudflare"],
+            )
+
+        assert result.exit_code == 1
+        assert "127.0.0.1 or localhost" in result.output
+        mock_factory.assert_not_called()
+        mock_start.assert_not_called()
