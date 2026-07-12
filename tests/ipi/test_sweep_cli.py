@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.ipi.cli import app
 
 # Disable Rich's ANSI coloring so substring assertions on --help output are
 # stable across Windows (no color) and Linux CI (color on by default). Rich
@@ -21,12 +21,12 @@ class TestSweepHelp:
     """Tests for sweep command help and discoverability."""
 
     def test_help_shows_examples(self) -> None:
-        result = runner.invoke(app, ["ipi", "sweep", "--help"])
+        result = runner.invoke(app, ["sweep", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
 
     def test_help_lists_required_flags(self) -> None:
-        result = runner.invoke(app, ["ipi", "sweep", "--help"])
+        result = runner.invoke(app, ["sweep", "--help"])
         assert result.exit_code == 0
         for flag in (
             "--model",
@@ -47,12 +47,12 @@ class TestSweepHelp:
         Uses the same literal substring check as the other flag assertions
         above so ANSI-color rendering can't silently hide the flag.
         """
-        result = runner.invoke(app, ["ipi", "sweep", "--help"])
+        result = runner.invoke(app, ["sweep", "--help"])
         assert result.exit_code == 0
         assert "citation-frame" in result.output
 
     def test_ipi_help_lists_sweep(self) -> None:
-        result = runner.invoke(app, ["ipi", "--help"])
+        result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "sweep" in result.output
 
@@ -62,7 +62,7 @@ class TestSweepDryRun:
 
     def test_dry_run_lists_all_combinations_by_default(self) -> None:
         """--dry-run enumerates every non-GENERIC template x the obvious style."""
-        result = runner.invoke(app, ["ipi", "sweep", "--dry-run"])
+        result = runner.invoke(app, ["sweep", "--dry-run"])
         assert result.exit_code == 0
         assert "dry run" in result.output.lower()
         # 11 templates in the registry minus GENERIC.
@@ -72,7 +72,7 @@ class TestSweepDryRun:
         """--templates restricts the dry-run enumeration."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "--dry-run", "--templates", "whois,report"],
+            ["sweep", "--dry-run", "--templates", "whois,report"],
         )
         assert result.exit_code == 0
         assert "whois" in result.output
@@ -84,7 +84,6 @@ class TestSweepDryRun:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "sweep",
                 "--dry-run",
                 "--templates",
@@ -106,7 +105,7 @@ class TestSweepFlagValidation:
         """Unknown template name produces a clear error."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "--dry-run", "--templates", "nonexistent"],
+            ["sweep", "--dry-run", "--templates", "nonexistent"],
         )
         assert result.exit_code != 0
         assert "nonexistent" in result.output.lower()
@@ -115,7 +114,7 @@ class TestSweepFlagValidation:
         """Unknown style name produces a clear error."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "--dry-run", "--styles", "bogus"],
+            ["sweep", "--dry-run", "--styles", "bogus"],
         )
         assert result.exit_code != 0
         assert "bogus" in result.output.lower()
@@ -124,7 +123,7 @@ class TestSweepFlagValidation:
         """Non-callback --payload-type is rejected with a clear message."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "--dry-run", "--payload-type", "exfil_summary"],
+            ["sweep", "--dry-run", "--payload-type", "exfil_summary"],
         )
         assert result.exit_code != 0
         assert "callback" in result.output.lower()
@@ -133,43 +132,41 @@ class TestSweepFlagValidation:
         """--payload-type callback is accepted (case-insensitive)."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "--dry-run", "--payload-type", "CALLBACK"],
+            ["sweep", "--dry-run", "--payload-type", "CALLBACK"],
         )
         assert result.exit_code == 0
 
     def test_citation_frame_plain_accepted(self) -> None:
         """--citation-frame plain parses."""
-        result = runner.invoke(app, ["ipi", "sweep", "--dry-run", "--citation-frame", "plain"])
+        result = runner.invoke(app, ["sweep", "--dry-run", "--citation-frame", "plain"])
         assert result.exit_code == 0
 
     def test_citation_frame_template_aware_accepted(self) -> None:
         """--citation-frame template-aware parses."""
-        result = runner.invoke(
-            app, ["ipi", "sweep", "--dry-run", "--citation-frame", "template-aware"]
-        )
+        result = runner.invoke(app, ["sweep", "--dry-run", "--citation-frame", "template-aware"])
         assert result.exit_code == 0
 
     def test_citation_frame_absent_defaults(self) -> None:
         """No --citation-frame flag is accepted (defaults to template-aware)."""
-        result = runner.invoke(app, ["ipi", "sweep", "--dry-run"])
+        result = runner.invoke(app, ["sweep", "--dry-run"])
         assert result.exit_code == 0
 
     def test_citation_frame_invalid_value_rejected(self) -> None:
         """Unknown --citation-frame value produces a non-zero exit + echoes the value."""
-        result = runner.invoke(app, ["ipi", "sweep", "--dry-run", "--citation-frame", "bogus"])
+        result = runner.invoke(app, ["sweep", "--dry-run", "--citation-frame", "bogus"])
         assert result.exit_code != 0
         assert "bogus" in result.output.lower()
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_no_endpoint_non_tty_fails(self, _mock: MagicMock) -> None:
         """Non-TTY with no endpoint fails (dry-run off)."""
-        result = runner.invoke(app, ["ipi", "sweep", "--model", "test"])
+        result = runner.invoke(app, ["sweep", "--model", "test"])
         assert result.exit_code != 0
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_no_model_non_tty_fails(self, _mock: MagicMock) -> None:
         """Non-TTY with no model fails (dry-run off)."""
-        result = runner.invoke(app, ["ipi", "sweep", "http://localhost/v1"])
+        result = runner.invoke(app, ["sweep", "http://localhost/v1"])
         assert result.exit_code != 0
 
     def test_concurrency_zero_fails(self) -> None:
@@ -177,7 +174,6 @@ class TestSweepFlagValidation:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "sweep",
                 "http://localhost/v1",
                 "--model",
@@ -193,7 +189,7 @@ class TestSweepFlagValidation:
         """--reps 0 fails with a clear error."""
         result = runner.invoke(
             app,
-            ["ipi", "sweep", "http://localhost/v1", "--model", "t", "--reps", "0"],
+            ["sweep", "http://localhost/v1", "--model", "t", "--reps", "0"],
         )
         assert result.exit_code != 0
         assert "reps" in result.output.lower()
@@ -223,7 +219,6 @@ class TestSweepApiKey:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "sweep",
                     "http://localhost/v1",
                     "--model",
@@ -264,7 +259,6 @@ class TestSweepCitationFrameKwarg:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "sweep",
                     "http://localhost/v1",
                     "--model",
@@ -302,7 +296,6 @@ class TestSweepCitationFrameKwarg:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "sweep",
                     "http://localhost/v1",
                     "--model",

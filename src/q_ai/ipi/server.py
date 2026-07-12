@@ -14,18 +14,17 @@ The server returns a fake 404 response on callback endpoints to avoid
 alerting the target system that the payload was successfully executed.
 
 Usage:
-    From the CLI (preferred):
+    From the IPI listen command (preferred)::
 
-    >>> qai ipi listen --port 8080
+        python -m q_ai.ipi listen --port 8080
 
-    Programmatic:
+    Programmatic::
 
-    >>> from q_ai.ipi.server import start_server
-    >>> start_server(host="127.0.0.1", port=8080)
+        from q_ai.ipi.server import start_server
+        start_server(host="127.0.0.1", port=8080)
 """
 
 import json
-import logging
 import threading
 import time
 import uuid
@@ -33,32 +32,20 @@ from collections import defaultdict, deque
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 
-import httpx
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import PlainTextResponse, Response
-from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 from rich.markup import escape
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from q_ai.core.bridge_token import ensure_bridge_token
 from q_ai.ipi import db
 from q_ai.ipi.listener import record_hit, score_confidence
 from q_ai.ipi.models import Hit, HitConfidence
 
-from .api import api_router
-from .ui import ui_router
-
 console = Console()
-_logger = logging.getLogger(__name__)
-
-# Module-level bridge config, set by start_server()
-_bridge_notify_url: str | None = None
-_bridge_token: str | None = None
 
 # Module-level tunnel-mode state, set by start_server() when --tunnel is active.
 # Drives forwarded-header trust in _resolve_source_info() and governs whether
@@ -259,12 +246,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Mount static files and include web UI / API routers
-_STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-app.include_router(api_router, prefix="/api")
-app.include_router(ui_router, prefix="/ui")
-
 
 _CONFIDENCE_STYLES = {
     HitConfidence.HIGH: "bold green",
@@ -306,33 +287,16 @@ def log_hit_to_console(hit: Hit) -> None:
 
 
 def _record_and_log_hit(hit: Hit) -> None:
-    """Persist a hit to the database, log it, and notify the main server.
+    """Persist a hit to the database and log it to the console.
 
     Called as a background task from the callback endpoint so the
     HTTP response is returned immediately without blocking on I/O.
-
-    After persisting, attempts a single POST to the main server's
-    internal bridge endpoint so the hit appears in the live feed.
-    Failure does not block hit recording or the callback response.
 
     Args:
         hit: Hit object to save and display.
     """
     record_hit(hit)
     log_hit_to_console(hit)
-
-    # Bridge notification — fire-and-forget with aggressive timeout
-    if _bridge_notify_url and _bridge_token:
-        try:
-            with httpx.Client(timeout=1.0) as client:
-                resp = client.post(
-                    f"{_bridge_notify_url}/api/internal/ipi-hit",
-                    json={"hit_id": hit.id},
-                    headers={"X-QAI-Bridge-Token": _bridge_token},
-                )
-                resp.raise_for_status()
-        except Exception as err:
-            _logger.warning("Bridge notification failed for hit %s: %s", hit.id[:8], err)
 
 
 # =========================================================================
@@ -561,7 +525,6 @@ async def health() -> dict:
 def start_server(
     host: str = "127.0.0.1",
     port: int = 8080,
-    notify_url: str = "http://127.0.0.1:8899",
     tunnel_provider: str | None = None,
 ) -> None:
     """Start the callback listener server.
@@ -579,22 +542,15 @@ def start_server(
     Args:
         host: Network interface to bind (default ``"127.0.0.1"``).
         port: TCP port to listen on (default ``8080``).
-        notify_url: URL of the main qai server for bridge notifications
-            (default ``"http://localhost:8899"``).
         tunnel_provider: If not ``None``, indicates the listener is
             running behind a reverse tunnel of the named provider
             (currently ``"cloudflare"``). Enables forwarded-header
             trust. ``None`` means local-only.
     """
-    global _bridge_notify_url, _bridge_token  # noqa: PLW0603
-    _bridge_notify_url = notify_url.rstrip("/")
-    _bridge_token = ensure_bridge_token()
     _set_tunnel_mode(tunnel_provider)
 
     console.print(f"[bold green]Starting q-ai IPI listener on {host}:{port}[/bold green]")
     console.print(f"   Callback URL: [blue]http://<your-ip>:{port}/c/<uuid>/<token>[/blue]")
-    console.print(f"   Dashboard:    [blue]http://localhost:{port}/ui/[/blue]")
-    console.print(f"   Bridge:       [blue]{_bridge_notify_url}[/blue]")
     console.print("   Press [bold]Ctrl+C[/bold] to stop\n")
 
     uvicorn_kwargs: dict[str, object] = {

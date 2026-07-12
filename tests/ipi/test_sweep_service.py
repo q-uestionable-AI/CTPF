@@ -11,7 +11,6 @@ import pytest
 
 from q_ai.core.db import get_connection, list_findings
 from q_ai.core.models import Severity
-from q_ai.imports.scored import parse_scored
 from q_ai.ipi import sweep_service
 from q_ai.ipi.models import CitationFrame, DocumentTemplate, PayloadStyle, PayloadType
 from q_ai.ipi.sweep_service import (
@@ -775,8 +774,8 @@ class TestExportScoredPrompts:
         assert written == tmp_path / "sweep.json"
         assert written.exists()
 
-    def test_export_round_trip_parseable_by_scored_importer(self, tmp_path: Path) -> None:
-        """qai import --format scored-prompts ingests sweep's export cleanly."""
+    def test_export_round_trip_json_shape(self, tmp_path: Path) -> None:
+        """Exported scored-prompts JSON has the expected top-level and entry shape."""
         output = tmp_path / "sweep.json"
         cases = [
             _make_case(DocumentTemplate.WHOIS, PayloadStyle.OBVIOUS),
@@ -790,14 +789,16 @@ class TestExportScoredPrompts:
 
         export_scored_prompts(run_result, "test-model", "http://test/v1", output)
 
-        import_result = parse_scored(output)
-        assert import_result.errors == []
-        assert len(import_result.findings) == 2
-        # Sweep-specific fields pass through as extras (not in known field set).
-        # Verify the raw evidence carried the sweep annotations by checking one.
-        raw = json.loads(import_result.findings[0].raw_evidence)
-        assert raw["template"] == "whois"
-        assert raw["style"] == "obvious"
+        export_data = json.loads(output.read_text(encoding="utf-8"))
+        assert isinstance(export_data, dict)
+        assert export_data["format"] == "scored-prompts"
+        assert export_data["version"] == "1.0"
+        assert export_data["total_probes"] == 2
+        assert isinstance(export_data["results"], list)
+        assert len(export_data["results"]) == 2
+        first = export_data["results"][0]
+        assert first["template"] == "whois"
+        assert first["style"] == "obvious"
 
 
 # ---------------------------------------------------------------------------
@@ -1166,13 +1167,17 @@ class TestCitationFrameExport:
         export_data = json.loads(written.read_text(encoding="utf-8"))
         assert all("citation_frame" not in entry for entry in export_data["results"])
 
-    def test_export_round_trips_through_scored_parser(self, tmp_path: Path) -> None:
-        """Adding the top-level field does not break ``parse_scored``."""
+    def test_export_round_trips_json_with_citation_frame(self, tmp_path: Path) -> None:
+        """Top-level citation_frame is preserved in scored-prompts JSON."""
         output = tmp_path / "exports" / "sweep-roundtrip.json"
         run_result = _compute_stats([_make_result()], citation_frame=CitationFrame.PLAIN)
         written = export_scored_prompts(run_result, "test-model", "http://test/v1", output)
-        parsed = parse_scored(written)
-        assert parsed is not None
+        export_data = json.loads(written.read_text(encoding="utf-8"))
+        assert isinstance(export_data, dict)
+        assert export_data["format"] == "scored-prompts"
+        assert export_data["citation_frame"] == "plain"
+        assert isinstance(export_data["results"], list)
+        assert len(export_data["results"]) == 1
 
 
 # Re-export markers so the test collector does not warn about unused imports.

@@ -7,25 +7,18 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Docs](https://img.shields.io/badge/docs-q--uestionable.ai-8b5cf6)](https://docs.q-uestionable.ai)
 
-**Security testing for agentic AI**
+**CTPF research harness — MCP observation, controlled fixtures, and evidence**
 
 A research program testing whether MCP and agentic AI vulnerabilities are exploitable end-to-end, with execution-level proof.
 
 Model-layer tests like Garak, PyRIT, or BIPIA can tell you "this model follows injected instructions." An audit scan can tell you "this MCP server has a vulnerable tool." A qai finding connects the two: the model weakness was exploitable end-to-end through a real agentic system. Authenticated callbacks confirm execution, not just compliance.
 
-The **Intel workspace** is the operator surface. A target-centric view where scan results, probe runs, and sweep findings accrue per target and drive payload generation for the end-to-end tests.
+Capabilities (transitional CLI surface):
 
-Capabilities:
+- Intercept MCP traffic (`qai proxy`)
+- Register and manage targets, runs, and findings
+- Library modules remain for IPI document generation, inject fixtures, audit scanning, and related research paths (not all are root-CLI commands)
 
-- Audit MCP servers
-- Intercept agent traffic
-- Test tool poisoning and prompt injection
-- Execute multi-step attack chains
-- Generate IPI payloads (adversarial documents with authenticated callbacks)
-- Poison coding assistant context files
-- Measure RAG retrieval rank
-
-Local web UI orchestrates multi-module workflows.
 All findings stored in a SQLite database.
 
 > By [Richard Spicer](https://richardspicer.io) · [{q-AI}](https://q-uestionable.ai)
@@ -34,50 +27,23 @@ All findings stored in a SQLite database.
 
 ## Quick Start
 
-Scan an MCP server:
+Intercept MCP traffic:
 
 ```bash
-qai audit scan http://localhost:3000/sse
+qai proxy --help
 ```
 
-Transport is inferred automatically. Launch the web UI:
-
-```bash
-qai ui
-```
-
----
-
-## Bring What You Have
-
-Already running [Garak](https://github.com/NVIDIA/garak) or [PyRIT](https://github.com/Azure/PyRIT), or working from [BIPIA](https://github.com/microsoft/BIPIA) benchmarks? Import their results and let qai prove whether the weaknesses they found are exploitable in real agentic systems.
+Register a target:
 
 ```bash
 qai targets add "My Server" http://localhost:3000/sse
-qai import report.jsonl --format garak --target <target-id>
-qai import conversations.json --format pyrit --target <target-id>
-qai import bipia.csv --format bipia --target <target-id>
-```
-
-Imported findings drive qai's native modules — inject payloads are prioritized based on compliance patterns your tools already discovered. Also supports SARIF from any tool.
-
----
-
-## Built-in Assistant
-
-An AI assistant helps you discover capabilities, interpret scan results, and plan testing workflows. It uses RAG over qai's documentation and your own reference material, with a trust boundary model that separates trusted docs from untrusted scan output. Works with local models (Ollama) or cloud APIs.
-
-```bash
-qai config set assist.provider ollama
-qai config set assist.model llama3.1
-qai assist "how do I scan an MCP server?"
 ```
 
 ---
 
 ## Framework Coverage
 
-All audit findings map to four security taxonomies:
+Audit findings map to four security taxonomies:
 
 | Framework | Coverage |
 |-----------|----------|
@@ -118,4 +84,4 @@ All tools are intended for authorized security testing only. Only test systems y
 
 ## AI Disclosure
 
-This project uses a human-led, AI-augmented workflow. See [AI-STATEMENT.md](AI-STATEMENT.md)
+This project uses AI-assisted development. All code is reviewed and tested before merge.

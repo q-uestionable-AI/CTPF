@@ -1,2 +1,0 @@
-{"entry_type": "eval", "eval_id": "eval-001", "probe": "some.Probe", "detector": "some.Detector", "passed": 5, "total": 10}
-{"entry_type": "attempt", "attempt_id": "att-001", "probe": "some.Probe", "output": "response"}

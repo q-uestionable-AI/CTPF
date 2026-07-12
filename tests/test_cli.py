@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 from typer.testing import CliRunner
 
 from q_ai.cli import app
 
 runner = CliRunner()
+
+_TAGLINE = "CTPF research harness"
 
 
 class TestCLIHelp:
@@ -17,7 +17,32 @@ class TestCLIHelp:
     def test_help_exits_zero(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "Security testing for agentic AI" in result.output
+        assert _TAGLINE in result.output
+
+    def test_help_shows_transitional_commands(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        for cmd in ("proxy", "targets", "runs", "findings", "config", "db"):
+            assert cmd in result.output
+
+    def test_help_hides_removed_commands(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        for cmd in (
+            "ui",
+            "audit",
+            "assist",
+            "rxp",
+            "inject",
+            "ipi",
+            "chain",
+            "cxp",
+            "imports",
+            "orchestrator",
+        ):
+            # Match as top-level command tokens, not substrings in longer words
+            assert f"  {cmd} " not in result.output
+            assert f"  {cmd}\n" not in result.output
 
 
 class TestCLIVersion:
@@ -39,22 +64,20 @@ class TestCLIVersion:
 
 
 class TestBareQai:
-    """Bare `qai` prints help screen instead of launching server."""
+    """Bare `qai` prints help screen."""
 
     def test_no_args_prints_help(self) -> None:
         result = runner.invoke(app, [])
         assert result.exit_code == 0
         assert "Quick Start" in result.output
+        assert _TAGLINE in result.output
+        assert "qai proxy" in result.output
+        assert "qai targets" in result.output
 
-    def test_no_args_shows_ui_hint(self) -> None:
+    def test_no_args_has_no_ui_hint(self) -> None:
         result = runner.invoke(app, [])
         assert result.exit_code == 0
-        assert "qai ui" in result.output
-
-    @patch("q_ai.cli._run_server")
-    def test_no_args_does_not_launch_server(self, mock_run: MagicMock) -> None:
-        runner.invoke(app, [])
-        mock_run.assert_not_called()
+        assert "qai ui" not in result.output
 
     def test_subcommands_still_work(self) -> None:
         result = runner.invoke(app, ["runs", "--help"])
@@ -62,39 +85,21 @@ class TestBareQai:
         assert "runs" in result.output.lower()
 
 
-class TestQaiUi:
-    """qai ui launches the web UI."""
+class TestRemovedUiCommand:
+    """qai ui is no longer registered."""
 
-    @patch("q_ai.cli._run_server")
-    def test_ui_launches_server(self, mock_run: MagicMock) -> None:
+    def test_ui_command_absent(self) -> None:
         result = runner.invoke(app, ["ui"])
-        assert result.exit_code == 0
-        mock_run.assert_called_once()
-
-    @patch("q_ai.cli._run_server")
-    def test_ui_port_option(self, mock_run: MagicMock) -> None:
-        result = runner.invoke(app, ["ui", "--port", "9000"])
-        assert result.exit_code == 0
-        assert mock_run.call_args.kwargs["port"] == 9000
-
-    @patch("q_ai.cli._run_server")
-    def test_ui_no_browser_option(self, mock_run: MagicMock) -> None:
-        result = runner.invoke(app, ["ui", "--no-browser"])
-        assert result.exit_code == 0
-        assert mock_run.call_args.kwargs["no_browser"] is True
-
-    def test_ui_invalid_port_fails(self) -> None:
-        result = runner.invoke(app, ["ui", "--port", "99999"])
         assert result.exit_code != 0
 
 
 class TestGroupedHelp:
     """Root --help shows grouped command panels."""
 
-    def test_help_shows_modules_group(self) -> None:
+    def test_help_shows_observe_group(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "Modules" in result.output
+        assert "Observe" in result.output
 
     def test_help_shows_start_group(self) -> None:
         result = runner.invoke(app, ["--help"])
@@ -106,7 +111,7 @@ class TestGroupedHelp:
         assert result.exit_code == 0
         assert "Manage" in result.output
 
-    def test_help_shows_audit_in_modules(self) -> None:
+    def test_help_has_no_modules_group(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "audit" in result.output
+        assert "Modules" not in result.output

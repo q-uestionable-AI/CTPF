@@ -9,7 +9,7 @@ import click
 import pytest
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.ipi.cli import app
 from q_ai.ipi.generate_service import GenerateResult, generate_documents
 from q_ai.ipi.models import DocumentTemplate, Format, PayloadStyle, TemplateSpec
 from q_ai.ipi.template_registry import (
@@ -298,10 +298,7 @@ class TestCLIIntegration:
 
         click_app = typer.main.get_command(app)
         with click.Context(click_app) as ctx:
-            ipi = click_app.get_command(ctx, "ipi")
-        assert ipi is not None
-        with click.Context(ipi) as ipi_ctx:
-            generate = ipi.get_command(ipi_ctx, "generate")
+            generate = click_app.get_command(ctx, "generate")
         assert generate is not None
         param_names = [p.name for p in generate.params]
         assert "template" in param_names
@@ -312,7 +309,6 @@ class TestCLIIntegration:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "generate",
                 "http://localhost:8080",
                 "--template",

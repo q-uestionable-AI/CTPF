@@ -1,4 +1,4 @@
-"""Tests for qai update-frameworks CLI command."""
+"""Tests for qai update-frameworks CLI command (module app)."""
 
 from __future__ import annotations
 
@@ -6,24 +6,19 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.core.cli.update_frameworks import app
 from q_ai.core.update_frameworks import AtlasDiff, FrameworkStatus
 
 runner = CliRunner()
 
 
-class TestUpdateFrameworksRegistration:
-    """update-frameworks is registered in the root CLI."""
+class TestUpdateFrameworksHelp:
+    """Module CLI help works after root deregistration."""
 
     def test_help_exits_zero(self) -> None:
-        result = runner.invoke(app, ["update-frameworks", "--help"])
-        assert result.exit_code == 0
-        assert "upstream" in result.output.lower() or "framework" in result.output.lower()
-
-    def test_appears_in_root_help(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "update-frameworks" in result.output
+        assert "upstream" in result.output.lower() or "framework" in result.output.lower()
 
 
 class TestUpdateFrameworksOutput:
@@ -53,7 +48,7 @@ class TestUpdateFrameworksOutput:
             ),
         ]
 
-        result = runner.invoke(app, ["update-frameworks"])
+        result = runner.invoke(app, [])
         assert result.exit_code == 0
         assert "mitre_atlas" in result.output
         assert "owasp_mcp_top10" in result.output
@@ -77,7 +72,7 @@ class TestUpdateFrameworksOutput:
             ),
         ]
 
-        result = runner.invoke(app, ["update-frameworks", "--atlas"])
+        result = runner.invoke(app, ["--atlas"])
         assert result.exit_code == 0
         assert "AML.T0100" in result.output
         assert "AML.T0001" in result.output
@@ -95,6 +90,6 @@ class TestUpdateFrameworksOutput:
             ),
         ]
 
-        result = runner.invoke(app, ["update-frameworks"])
+        result = runner.invoke(app, [])
         assert result.exit_code == 0
         assert "Failed to fetch" in result.output

@@ -1,4 +1,4 @@
-"""q-ai: Security testing for agentic AI."""
+"""q-ai: CTPF research harness for agentic AI security research."""
 
 from importlib.metadata import version
 

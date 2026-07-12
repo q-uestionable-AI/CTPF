@@ -1,11 +1,13 @@
-"""CLI for the inject module — tool poisoning and prompt injection testing.
+"""Library CLI for inject MCP fixtures.
 
 Provides subcommands for serving a malicious MCP server with configurable
-payloads, running injection campaigns against AI models, listing available
-payloads, and rendering campaign reports.
+payloads and listing available payload templates. Not registered on the
+root ``qai`` CLI — invoke via ``python -m q_ai.inject`` or import
+:data:`app` directly.
 """
 
-import os
+from __future__ import annotations
+
 from pathlib import Path
 
 import typer
@@ -82,6 +84,15 @@ def serve(
     The server presents MCP tools with poisoned descriptions and/or
     returns injection payloads in tool responses. Connect any MCP
     client to test how it handles adversarial tool content.
+
+    Args:
+        transport: Transport mode (``stdio`` or ``streamable-http``).
+        port: Port for streamable-http listener.
+        payload_dir: Optional directory of payload templates.
+        config: Optional YAML whitelist of payload names.
+
+    Raises:
+        typer.BadParameter: If transport or config is invalid.
     """
     if transport not in _VALID_TRANSPORTS:
         raise typer.BadParameter(
@@ -112,99 +123,6 @@ def serve(
         server.run(transport="streamable-http")
 
 
-@app.command()
-def campaign(
-    model: str | None = typer.Option(
-        None,
-        help=(
-            "LLM model in provider/model format "
-            "(e.g., anthropic/claude-sonnet-4-20250514, openai/gpt-4o, ollama/llama3). "
-            "Falls back to QAI_MODEL env var. "
-            "Bare model names without a provider prefix are treated as Anthropic."
-        ),
-    ),
-    rounds: int = typer.Option(1, help="Number of attempts per payload"),
-    output: str = typer.Option(".", help="Output directory for campaign JSON"),
-    payloads: str = typer.Option("all", help="Comma-separated payload names, or 'all'"),
-    technique: str | None = typer.Option(
-        None,
-        help="Filter by technique: 'description_poisoning', 'output_injection', "
-        "'cross_tool_escalation'",
-    ),
-    target: str | None = typer.Option(
-        None,
-        help="Filter by target agent (e.g., 'claude', 'gpt')",
-    ),
-) -> None:
-    """Run an injection campaign against an AI model.
-
-    Systematically tests poisoned tool payloads against the target model,
-    scoring each for effectiveness. Set the appropriate API key for your
-    provider via ``qai config set-credential`` or environment variable.
-    Results are saved as structured JSON.
-    """
-    import asyncio
-
-    from q_ai.inject.campaign import run_campaign
-
-    resolved_model = model or os.environ.get("QAI_MODEL")
-    if not resolved_model:
-        console.print(
-            "[red]Error:[/red] No model specified. Use --model flag or set "
-            "QAI_MODEL environment variable."
-        )
-        raise typer.Exit(code=1)
-
-    templates = load_all_templates()
-    templates = filter_templates(
-        templates, technique=_parse_technique(technique), target_agent=target
-    )
-
-    # Apply payload name filter
-    if payloads != "all":
-        names = {n.strip() for n in payloads.split(",")}
-        templates = [t for t in templates if t.name in names]
-
-    if not templates:
-        console.print("[yellow]No payloads matched the given filters.[/yellow]")
-        raise typer.Exit(1)
-
-    console.print("[bold blue]qai inject campaign[/bold blue]")
-    console.print(f"  Model:    {resolved_model}")
-    console.print(f"  Payloads: {len(templates)}")
-    console.print(f"  Rounds:   {rounds}")
-    console.print()
-
-    async def _run() -> None:
-        result = await run_campaign(
-            templates=templates,
-            model=resolved_model,
-            rounds=rounds,
-            output_dir=Path(output),
-        )
-
-        from q_ai.inject.mapper import persist_campaign
-
-        persist_campaign(result, source="cli")
-
-        summary = result.summary()
-
-        console.print("\n[bold]Campaign Complete[/bold]")
-        console.print(f"  Total results:       {summary['total']}")
-        console.print(f"  Full compliance:     {summary['full_compliance']}")
-        console.print(f"  Partial compliance:  {summary['partial_compliance']}")
-        console.print(f"  Refusal with leak:   {summary['refusal_with_leak']}")
-        console.print(f"  Clean refusal:       {summary['clean_refusal']}")
-        console.print(f"  Errors:              {summary['error']}")
-        console.print(f"\n[dim]Results saved to {Path(output) / (result.id + '.json')}[/dim]")
-
-    try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Campaign interrupted.[/yellow]")
-        raise typer.Exit(130) from None
-
-
 @app.command(name="list-payloads")
 def list_payloads(
     technique: str | None = typer.Option(
@@ -217,7 +135,15 @@ def list_payloads(
         help="Filter by target agent: 'claude', 'gpt', 'copilot', etc.",
     ),
 ) -> None:
-    """List available injection payload templates."""
+    """List available injection payload templates.
+
+    Args:
+        technique: Optional technique filter string.
+        target: Optional target-agent filter string.
+
+    Raises:
+        typer.BadParameter: If ``technique`` is not a valid enum value.
+    """
     templates = load_all_templates()
     templates = filter_templates(
         templates, technique=_parse_technique(technique), target_agent=target
@@ -241,74 +167,3 @@ def list_payloads(
         )
 
     console.print(table)
-
-
-@app.command()
-def report(
-    input_file: str = typer.Option(..., "--input", "-i", help="Path to campaign JSON file"),
-    output_format: str = typer.Option(
-        "table", "--format", "-f", help="Output format: 'table' or 'json'"
-    ),
-) -> None:
-    """Render a summary report from campaign results.
-
-    Loads a campaign JSON file and displays a Rich table summary.
-    Use --format json to output the raw campaign JSON.
-    """
-    import json as json_mod
-
-    from q_ai.inject.models import Campaign
-
-    input_path = Path(input_file)
-    if not input_path.exists():
-        console.print(f"[red]Input file not found:[/red] {input_path}")
-        raise typer.Exit(1)
-
-    try:
-        raw = json_mod.loads(input_path.read_text(encoding="utf-8"))
-    except json_mod.JSONDecodeError as exc:
-        console.print(f"[red]Failed to parse campaign JSON:[/red] {exc}")
-        raise typer.Exit(1) from None
-
-    if output_format == "json":
-        console.print_json(json_mod.dumps(raw, indent=2))
-        return
-
-    campaign_obj = Campaign.from_dict(raw)
-
-    console.print("[bold blue]qai inject report[/bold blue]")
-    console.print(f"  Campaign: {campaign_obj.id}")
-    console.print(f"  Model:    {campaign_obj.model}")
-    console.print()
-
-    outcome_color = {
-        "full_compliance": "red",
-        "partial_compliance": "yellow",
-        "refusal_with_leak": "bright_yellow",
-        "clean_refusal": "green",
-        "error": "dim",
-    }
-
-    table = Table(title="Campaign Results")
-    table.add_column("Payload", style="cyan", no_wrap=True)
-    table.add_column("Technique", style="green", no_wrap=True)
-    table.add_column("Outcome", no_wrap=True)
-    table.add_column("Evidence", max_width=60)
-
-    for r in campaign_obj.results:
-        color = outcome_color.get(r.outcome.value, "white")
-        outcome_str = f"[{color}]{r.outcome.value}[/{color}]"
-        evidence_text = r.evidence.replace("\n", " ").replace("\r", " ")
-        evidence_preview = evidence_text[:80] + "..." if len(evidence_text) > 80 else evidence_text
-        table.add_row(r.payload_name, r.technique, outcome_str, evidence_preview)
-
-    console.print(table)
-
-    # Summary row
-    summary = campaign_obj.summary()
-    console.print(f"\n[bold]Summary[/bold] ({summary['total']} results)")
-    for outcome_name, count in summary.items():
-        if outcome_name == "total":
-            continue
-        color = outcome_color.get(outcome_name, "white")
-        console.print(f"  [{color}]{outcome_name}[/{color}]: {count}")

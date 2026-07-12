@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.ipi.cli import app
 from q_ai.ipi.generate_service import GenerateResult
 from q_ai.ipi.models import CitationFrame, DocumentTemplate
 from q_ai.ipi.sweep_selection import (
@@ -30,14 +30,14 @@ class TestIpiGenerateCallbackArg:
     """Tests for callback as positional arg in ipi generate."""
 
     def test_help_shows_examples(self) -> None:
-        result = runner.invoke(app, ["ipi", "generate", "--help"])
+        result = runner.invoke(app, ["generate", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_no_callback_non_tty_fails(self, _mock: object) -> None:
         """Non-TTY with no callback fails with clear error."""
-        result = runner.invoke(app, ["ipi", "generate"])
+        result = runner.invoke(app, ["generate"])
         assert result.exit_code != 0
 
     @patch("q_ai.ipi.commands.generate.generate_documents")
@@ -46,7 +46,7 @@ class TestIpiGenerateCallbackArg:
         from q_ai.ipi.generate_service import GenerateResult
 
         mock_gen.return_value = GenerateResult(campaigns=[], errors=[])  # type: ignore[attr-defined]
-        result = runner.invoke(app, ["ipi", "generate", "http://localhost:8080"])
+        result = runner.invoke(app, ["generate", "http://localhost:8080"])
         assert result.exit_code == 0
 
     @patch("q_ai.ipi.commands.generate.generate_documents")
@@ -55,7 +55,7 @@ class TestIpiGenerateCallbackArg:
         from q_ai.ipi.generate_service import GenerateResult
 
         mock_gen.return_value = GenerateResult(campaigns=[], errors=[])  # type: ignore[attr-defined]
-        result = runner.invoke(app, ["ipi", "generate", "--callback", "http://localhost:8080"])
+        result = runner.invoke(app, ["generate", "--callback", "http://localhost:8080"])
         assert result.exit_code == 0
 
 
@@ -70,20 +70,20 @@ class TestIpiHelpText:
 
     def test_techniques_help_enumerates_all_seven_formats(self) -> None:
         """`qai ipi techniques --help` must list every supported format."""
-        result = runner.invoke(app, ["ipi", "techniques", "--help"])
+        result = runner.invoke(app, ["techniques", "--help"])
         assert result.exit_code == 0
         for fmt in ("pdf", "image", "markdown", "html", "docx", "ics", "eml"):
             assert fmt in result.output, f"format {fmt!r} missing from techniques --help"
 
     def test_generate_technique_help_mentions_none(self) -> None:
         """`qai ipi generate --help` must mention `none` as a technique option."""
-        result = runner.invoke(app, ["ipi", "generate", "--help"])
+        result = runner.invoke(app, ["generate", "--help"])
         assert result.exit_code == 0
         assert "none" in result.output, "`none` control condition not mentioned in generate --help"
 
     def test_probe_export_help_references_scored_prompts(self) -> None:
         """`qai ipi probe --help` must describe --export as scored-prompts JSON."""
-        result = runner.invoke(app, ["ipi", "probe", "--help"])
+        result = runner.invoke(app, ["probe", "--help"])
         assert result.exit_code == 0
         # Accept either hyphenated or space-separated form to tolerate Typer wrap.
         assert "scored-prompts" in result.output or "scored prompts" in result.output, (
@@ -92,7 +92,7 @@ class TestIpiHelpText:
 
     def test_generate_help_mentions_target_auto_select(self) -> None:
         """`qai ipi generate --help` must mention the --target auto-select flag."""
-        result = runner.invoke(app, ["ipi", "generate", "--help"])
+        result = runner.invoke(app, ["generate", "--help"])
         assert result.exit_code == 0
         assert "--target" in result.output, "--target flag missing from generate --help"
 
@@ -132,7 +132,7 @@ class TestIpiGenerateTargetAutoSelect:
 
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--target", "target-123"],
+            ["generate", "http://localhost:8080", "--target", "target-123"],
         )
 
         assert result.exit_code == 0, result.output
@@ -159,7 +159,6 @@ class TestIpiGenerateTargetAutoSelect:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "generate",
                 "http://localhost:8080",
                 "--target",
@@ -188,7 +187,7 @@ class TestIpiGenerateTargetAutoSelect:
 
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--target", "target-123"],
+            ["generate", "http://localhost:8080", "--target", "target-123"],
         )
 
         assert result.exit_code != 0
@@ -217,7 +216,7 @@ class TestIpiGenerateTargetAutoSelect:
 
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--target", "target-123"],
+            ["generate", "http://localhost:8080", "--target", "target-123"],
         )
 
         assert result.exit_code != 0
@@ -246,7 +245,7 @@ class TestIpiGenerateTargetAutoSelect:
 
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--target", "target-123"],
+            ["generate", "http://localhost:8080", "--target", "target-123"],
         )
 
         assert result.exit_code != 0
@@ -273,7 +272,7 @@ class TestIpiGenerateTargetAutoSelect:
 
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--target", "target-123"],
+            ["generate", "http://localhost:8080", "--target", "target-123"],
         )
 
         assert result.exit_code == 0, result.output
@@ -295,7 +294,7 @@ class TestIpiGenerateTargetAutoSelect:
         """Without --target, selection is never invoked, even when no --template is passed."""
         mock_gen.return_value = GenerateResult(campaigns=[], errors=[])  # type: ignore[attr-defined]
 
-        result = runner.invoke(app, ["ipi", "generate", "http://localhost:8080"])
+        result = runner.invoke(app, ["generate", "http://localhost:8080"])
 
         assert result.exit_code == 0, result.output
         mock_select.assert_not_called()  # type: ignore[attr-defined]
@@ -309,7 +308,7 @@ class TestIpiGenerateCitationFrame:
 
     def test_help_lists_citation_frame(self) -> None:
         """PR #123-style drift guard: --citation-frame surfaces in --help."""
-        result = runner.invoke(app, ["ipi", "generate", "--help"])
+        result = runner.invoke(app, ["generate", "--help"])
         assert result.exit_code == 0
         assert "citation-frame" in result.output
 
@@ -322,7 +321,7 @@ class TestIpiGenerateCitationFrame:
     ) -> None:
         """No --citation-frame -> generate_documents receives TEMPLATE_AWARE."""
         mock_gen.return_value = GenerateResult(campaigns=[], errors=[])  # type: ignore[attr-defined]
-        result = runner.invoke(app, ["ipi", "generate", "http://localhost:8080"])
+        result = runner.invoke(app, ["generate", "http://localhost:8080"])
 
         assert result.exit_code == 0, result.output
         call_kwargs = mock_gen.call_args.kwargs  # type: ignore[attr-defined]
@@ -340,7 +339,6 @@ class TestIpiGenerateCitationFrame:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "generate",
                 "http://localhost:8080",
                 "--citation-frame",
@@ -368,7 +366,6 @@ class TestIpiGenerateCitationFrame:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "generate",
                 "http://localhost:8080",
                 "--citation-frame",
@@ -384,7 +381,7 @@ class TestIpiGenerateCitationFrame:
         """--citation-frame bogus exits non-zero with the parser's error."""
         result = runner.invoke(
             app,
-            ["ipi", "generate", "http://localhost:8080", "--citation-frame", "bogus"],
+            ["generate", "http://localhost:8080", "--citation-frame", "bogus"],
         )
         assert result.exit_code != 0
         assert "bogus" in result.output
@@ -394,7 +391,6 @@ class TestIpiGenerateCitationFrame:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "sweep",
                 "--dry-run",
                 "--templates",

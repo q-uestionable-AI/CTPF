@@ -1,4 +1,4 @@
-"""Tests for q_ai inject CLI subcommands."""
+"""Tests for q_ai inject library CLI (fixtures-only surface)."""
 
 from __future__ import annotations
 
@@ -23,17 +23,24 @@ def _strip_ansi(text: str) -> str:
 
 
 class TestInjectHelp:
-    """inject --help shows all subcommands."""
+    """inject --help shows fixture subcommands only."""
 
     def test_inject_help(self) -> None:
-        """All four subcommands appear in help output."""
+        """Serve and list-payloads appear; campaign/report do not."""
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         plain = _strip_ansi(result.output)
         assert "serve" in plain
-        assert "campaign" in plain
         assert "list-payloads" in plain
-        assert "report" in plain
+        assert "campaign" not in plain
+        assert "report" not in plain
+
+    def test_module_entrypoint_exports_app(self) -> None:
+        """``python -m q_ai.inject`` resolves via package ``__main__``."""
+        import importlib
+
+        main = importlib.import_module("q_ai.inject.__main__")
+        assert main.app is app
 
 
 class TestServe:
@@ -101,49 +108,6 @@ class TestLoadConfigNames:
             _load_config_names(config)
 
 
-class TestCampaign:
-    """inject campaign subcommand."""
-
-    def test_campaign_help(self) -> None:
-        """Help text includes all campaign options."""
-        result = runner.invoke(app, ["campaign", "--help"])
-        assert result.exit_code == 0
-        plain = _strip_ansi(result.output)
-        assert "--model" in plain
-        assert "--rounds" in plain
-        assert "--output" in plain
-        assert "--payloads" in plain
-        assert "--technique" in plain
-        assert "--target" in plain
-
-    def test_campaign_no_model_no_env_var_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Campaign with no --model and no QAI_MODEL exits with error."""
-        monkeypatch.delenv("QAI_MODEL", raising=False)
-        result = runner.invoke(app, ["campaign"])
-        assert result.exit_code == 1
-        plain = _strip_ansi(result.output)
-        assert "No model specified" in plain
-
-    def test_campaign_env_var_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Campaign uses QAI_MODEL env var when --model not provided."""
-        monkeypatch.setenv("QAI_MODEL", "test-env-model")
-        # Use nonexistent payload to avoid API call — just verify model resolves
-        result = runner.invoke(app, ["campaign", "--payloads", "nonexistent_payload"])
-        assert result.exit_code == 1
-        plain = _strip_ansi(result.output)
-        # Should get "No payloads matched" not "No model specified"
-        assert "No payloads matched" in plain
-
-    def test_campaign_no_matching_payloads(self) -> None:
-        """Campaign with no matching payloads exits 1."""
-        result = runner.invoke(
-            app, ["campaign", "--model", "test-model", "--payloads", "nonexistent_payload"]
-        )
-        assert result.exit_code == 1
-        plain = _strip_ansi(result.output)
-        assert "No payloads matched" in plain
-
-
 class TestListPayloads:
     """inject list-payloads subcommand."""
 
@@ -156,10 +120,12 @@ class TestListPayloads:
         assert "--target" in plain
 
     def test_list_payloads_exits_zero(self) -> None:
+        """list-payloads exits successfully."""
         result = runner.invoke(app, ["list-payloads"])
         assert result.exit_code == 0
 
     def test_list_payloads_shows_all_payloads(self) -> None:
+        """Known payload names appear in the table."""
         result = runner.invoke(app, ["list-payloads"])
         assert result.exit_code == 0
         plain = _strip_ansi(result.output)
@@ -168,12 +134,12 @@ class TestListPayloads:
         assert "shadow_tool" in plain
 
     def test_list_payloads_filter_description_poisoning(self) -> None:
+        """Technique filter keeps description_poisoning rows only."""
         result = runner.invoke(app, ["list-payloads", "--technique", "description_poisoning"])
         assert result.exit_code == 0
         plain = _strip_ansi(result.output)
         assert "description_poisoning" in plain
         assert "output_injection" not in plain
-        # Count payload rows by known names
         dp_names = [
             "exfil_via_important_tag",
             "preference_manipulation",
@@ -186,6 +152,7 @@ class TestListPayloads:
             assert name in plain, f"Missing payload: {name}"
 
     def test_list_payloads_filter_output_injection(self) -> None:
+        """Technique filter keeps output_injection rows."""
         result = runner.invoke(app, ["list-payloads", "--technique", "output_injection"])
         assert result.exit_code == 0
         plain = _strip_ansi(result.output)
@@ -199,6 +166,7 @@ class TestListPayloads:
             assert name in plain, f"Missing payload: {name}"
 
     def test_list_payloads_filter_cross_tool(self) -> None:
+        """Technique filter keeps cross_tool_escalation rows."""
         result = runner.invoke(app, ["list-payloads", "--technique", "cross_tool_escalation"])
         assert result.exit_code == 0
         plain = _strip_ansi(result.output)
@@ -207,78 +175,8 @@ class TestListPayloads:
             assert name in plain, f"Missing payload: {name}"
 
     def test_list_payloads_invalid_technique(self) -> None:
+        """Unknown technique exits with an error."""
         result = runner.invoke(app, ["list-payloads", "--technique", "nonexistent"])
         assert result.exit_code != 0
         plain = _strip_ansi(result.output)
         assert "Unknown technique" in plain
-
-
-class TestReport:
-    """inject report subcommand."""
-
-    def test_report_help(self) -> None:
-        """Help text includes all report options."""
-        result = runner.invoke(app, ["report", "--help"])
-        assert result.exit_code == 0
-        plain = _strip_ansi(result.output)
-        assert "--input" in plain
-        assert "--format" in plain
-
-    def test_report_missing_file(self) -> None:
-        """Report with nonexistent input exits 1."""
-        result = runner.invoke(app, ["report", "--input", "nonexistent.json"])
-        assert result.exit_code == 1
-        plain = _strip_ansi(result.output)
-        assert "not found" in plain.lower()
-
-    def test_report_table_format(self, tmp_path: Path) -> None:
-        """Report renders a Rich table from valid campaign JSON."""
-        import json
-
-        campaign_data = {
-            "id": "campaign-test",
-            "name": "test",
-            "model": "test-model",
-            "started_at": "2026-03-03T00:00:00+00:00",
-            "finished_at": "2026-03-03T00:01:00+00:00",
-            "summary": {"total": 1, "full_compliance": 1},
-            "results": [
-                {
-                    "payload_name": "test_payload",
-                    "technique": "description_poisoning",
-                    "outcome": "full_compliance",
-                    "evidence": "[]",
-                    "target_agent": "test-model",
-                    "timestamp": "2026-03-03T00:00:30+00:00",
-                }
-            ],
-        }
-        json_file = tmp_path / "campaign.json"
-        json_file.write_text(json.dumps(campaign_data))
-
-        result = runner.invoke(app, ["report", "--input", str(json_file)])
-        assert result.exit_code == 0
-        plain = _strip_ansi(result.output)
-        assert "test_payload" in plain
-        assert "full_compliance" in plain
-
-    def test_report_json_format(self, tmp_path: Path) -> None:
-        """Report with --format json outputs raw JSON."""
-        import json
-
-        campaign_data = {
-            "id": "campaign-test",
-            "name": "test",
-            "model": "test-model",
-            "started_at": "2026-03-03T00:00:00+00:00",
-            "finished_at": None,
-            "summary": {"total": 0},
-            "results": [],
-        }
-        json_file = tmp_path / "campaign.json"
-        json_file.write_text(json.dumps(campaign_data))
-
-        result = runner.invoke(app, ["report", "--input", str(json_file), "--format", "json"])
-        assert result.exit_code == 0
-        plain = _strip_ansi(result.output)
-        assert "campaign-test" in plain

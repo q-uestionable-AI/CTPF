@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.ipi.cli import app
 
 runner = CliRunner()
 
@@ -16,12 +16,12 @@ class TestProbeHelp:
     """Tests for probe command help and discoverability."""
 
     def test_help_shows_examples(self) -> None:
-        result = runner.invoke(app, ["ipi", "probe", "--help"])
+        result = runner.invoke(app, ["probe", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
 
     def test_ipi_help_lists_probe(self) -> None:
-        result = runner.invoke(app, ["ipi", "--help"])
+        result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "probe" in result.output
 
@@ -31,7 +31,7 @@ class TestProbeDryRun:
 
     def test_dry_run_lists_probes(self) -> None:
         """--dry-run displays probe table without sending requests."""
-        result = runner.invoke(app, ["ipi", "probe", "--dry-run"])
+        result = runner.invoke(app, ["probe", "--dry-run"])
         assert result.exit_code == 0
         assert "dry run" in result.output.lower()
         assert "20" in result.output  # 20 probes
@@ -48,7 +48,7 @@ class TestProbeDryRun:
             '    user_prompt: "Say {canary}"\n'
             '    canary_match: "{canary}"\n'
         )
-        result = runner.invoke(app, ["ipi", "probe", "--dry-run", "--probe-set", str(probe_file)])
+        result = runner.invoke(app, ["probe", "--dry-run", "--probe-set", str(probe_file)])
         assert result.exit_code == 0
         assert "1" in result.output  # 1 probe
 
@@ -59,13 +59,13 @@ class TestProbeArgParsing:
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_no_endpoint_non_tty_fails(self, _mock: MagicMock) -> None:
         """Non-TTY with no endpoint fails with clear error."""
-        result = runner.invoke(app, ["ipi", "probe", "--model", "test"])
+        result = runner.invoke(app, ["probe", "--model", "test"])
         assert result.exit_code != 0
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_no_model_non_tty_fails(self, _mock: MagicMock) -> None:
         """Non-TTY with no model fails with clear error."""
-        result = runner.invoke(app, ["ipi", "probe", "http://localhost/v1"])
+        result = runner.invoke(app, ["probe", "http://localhost/v1"])
         assert result.exit_code != 0
 
     def test_invalid_probe_set_fails(self) -> None:
@@ -73,7 +73,6 @@ class TestProbeArgParsing:
         result = runner.invoke(
             app,
             [
-                "ipi",
                 "probe",
                 "http://localhost/v1",
                 "--model",
@@ -89,7 +88,7 @@ class TestProbeArgParsing:
         """--concurrency 0 fails with clear error."""
         result = runner.invoke(
             app,
-            ["ipi", "probe", "http://localhost/v1", "--model", "t", "--concurrency", "0"],
+            ["probe", "http://localhost/v1", "--model", "t", "--concurrency", "0"],
         )
         assert result.exit_code != 0
         assert "concurrency" in result.output.lower()
@@ -115,7 +114,7 @@ class TestProbeApiKey:
         with patch("q_ai.ipi.probe_service.persist_probe_run", return_value="fake-run-id"):
             result = runner.invoke(
                 app,
-                ["ipi", "probe", "http://localhost/v1", "--model", "test"],
+                ["probe", "http://localhost/v1", "--model", "test"],
             )
 
         assert result.exit_code == 0

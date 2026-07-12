@@ -1,4 +1,4 @@
-"""``qai ipi listen`` — start the callback listener server."""
+"""``qai ipi listen`` / ``python -m q_ai.ipi listen`` — callback listener."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ def _run_listen_with_tunnel(
     *,
     host: str,
     port: int,
-    notify_url: str,
     tunnel_provider: str,
 ) -> None:
     """Start the listener behind a named tunnel provider.
@@ -24,7 +23,6 @@ def _run_listen_with_tunnel(
     Args:
         host: Listener bind interface.
         port: Listener bind port.
-        notify_url: Main qai bridge URL.
         tunnel_provider: Tunnel provider name (e.g. ``"cloudflare"``).
 
     Raises:
@@ -76,7 +74,6 @@ def _run_listen_with_tunnel(
         start_server(
             host=host,
             port=port,
-            notify_url=notify_url,
             tunnel_provider=tunnel_provider,
         )
     finally:
@@ -88,10 +85,6 @@ def _run_listen_with_tunnel(
 def listen(
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on")] = 8080,
     host: Annotated[str, typer.Option("--host", "-h", help="Host to bind to")] = "127.0.0.1",
-    notify_url: Annotated[
-        str,
-        typer.Option("--notify-url", help="Main qai server URL for hit notifications"),
-    ] = "http://127.0.0.1:8899",
     tunnel: Annotated[
         str | None,
         typer.Option(
@@ -115,12 +108,11 @@ def listen(
     header.
     """
     if tunnel is None:
-        start_server(host=host, port=port, notify_url=notify_url)
+        start_server(host=host, port=port)
         return
 
     _run_listen_with_tunnel(
         host=host,
         port=port,
-        notify_url=notify_url,
         tunnel_provider=tunnel,
     )

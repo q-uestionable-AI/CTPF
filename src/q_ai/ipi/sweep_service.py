@@ -924,12 +924,9 @@ def export_scored_prompts(
 ) -> Path:
     """Export sweep results in scored-prompts JSON format.
 
-    Output shape is the contract consumed by the benchmark import parser
-    (:mod:`q_ai.imports.scored`), identical to probe's export so that
-    ``qai import --format scored-prompts`` ingests both without
-    special-casing. Sweep-specific fields (template, style,
-    payload_type, per-case signals) appear on each entry and pass through
-    the import parser as ``_extra_fields``.
+    Output shape matches probe's scored-prompts export for offline analysis.
+    Sweep-specific fields (template, style, payload_type, per-case signals)
+    appear on each entry.
 
     Relative paths resolve under :data:`~q_ai.ipi.probe_service.IPI_EXPORTS_DIR`;
     collisions append an incrementing suffix to avoid overwrite.

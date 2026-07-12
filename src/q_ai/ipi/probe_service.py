@@ -25,7 +25,7 @@ from q_ai.core.db import (
     update_run_status,
 )
 from q_ai.core.models import RunStatus, Severity
-from q_ai.imports.taxonomy import resolve_bridge
+from q_ai.ipi.taxonomy import resolve_bridge
 
 logger = logging.getLogger(__name__)
 
@@ -720,9 +720,10 @@ def export_scored_prompts(
 ) -> Path:
     """Export probe results in scored-prompts JSON format.
 
-    This output format is the contract consumed by the benchmark import parser.
-    Relative paths are resolved against :data:`IPI_EXPORTS_DIR`; if the target
-    file already exists, an incrementing suffix is appended to avoid overwrite.
+    Writes a self-describing JSON document with per-probe scores for offline
+    analysis. Relative paths are resolved against :data:`IPI_EXPORTS_DIR`; if
+    the target file already exists, an incrementing suffix is appended to
+    avoid overwrite.
 
     Args:
         run_result: The completed probe run.

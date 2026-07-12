@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.audit.cli import app
 
 runner = CliRunner()
 
@@ -22,14 +22,14 @@ class TestListChecks:
 
     def test_lists_all_scanners(self) -> None:
         """Verify list-checks shows injection scanner."""
-        result = runner.invoke(app, ["audit", "list-checks"])
+        result = runner.invoke(app, ["list-checks"])
         assert result.exit_code == 0
         assert "injection" in result.output
         assert "command_injection" in result.output
 
     def test_shows_10_scanners(self) -> None:
         """Verify all 10 scanner categories appear in list-checks output."""
-        result = runner.invoke(app, ["audit", "list-checks"])
+        result = runner.invoke(app, ["list-checks"])
         assert result.exit_code == 0
         for cat in [
             "command_injection",
@@ -47,7 +47,7 @@ class TestListChecks:
 
     def test_framework_flag(self) -> None:
         """Verify --framework owasp_mcp_top10 shows OWASP IDs."""
-        result = runner.invoke(app, ["audit", "list-checks", "--framework", "owasp_mcp_top10"])
+        result = runner.invoke(app, ["list-checks", "--framework", "owasp_mcp_top10"])
         assert result.exit_code == 0
         assert "MCP05" in result.output
 
@@ -57,7 +57,7 @@ class TestAuditSubcommand:
 
     def test_audit_help(self) -> None:
         """Verify audit help shows all subcommands."""
-        result = runner.invoke(app, ["audit", "--help"])
+        result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "scan" in result.output
         assert "list-checks" in result.output
@@ -69,14 +69,14 @@ class TestAuditScanPositionalTarget:
     """Tests for positional TARGET and transport inference in audit scan."""
 
     def test_scan_help_shows_examples(self) -> None:
-        result = runner.invoke(app, ["audit", "scan", "--help"])
+        result = runner.invoke(app, ["scan", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_scan_no_args_non_tty_fails(self, _mock: object) -> None:
         """Non-TTY with no target fails with clear error."""
-        result = runner.invoke(app, ["audit", "scan"])
+        result = runner.invoke(app, ["scan"])
         assert result.exit_code != 0
 
     @patch("q_ai.audit.cli.MCPConnection")
@@ -96,7 +96,7 @@ class TestAuditScanPositionalTarget:
         local_runner = CliRunner(env=_NO_COLOR_ENV)
         result = local_runner.invoke(
             app,
-            ["audit", "scan", "--transport", "stdio", "--command", "not-a-real-server"],
+            ["scan", "--transport", "stdio", "--command", "not-a-real-server"],
         )
         assert result.exit_code != 0
         assert "Connection failed" in result.output
@@ -106,13 +106,13 @@ class TestAuditEnumeratePositionalTarget:
     """Tests for positional TARGET in audit enumerate."""
 
     def test_enumerate_help_shows_examples(self) -> None:
-        result = runner.invoke(app, ["audit", "enumerate", "--help"])
+        result = runner.invoke(app, ["enumerate", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
 
     @patch("q_ai.core.cli.prompt.is_tty", return_value=False)
     def test_enumerate_no_args_non_tty_fails(self, _mock: object) -> None:
-        result = runner.invoke(app, ["audit", "enumerate"])
+        result = runner.invoke(app, ["enumerate"])
         assert result.exit_code != 0
 
     @patch("q_ai.audit.cli.MCPConnection")
@@ -129,7 +129,7 @@ class TestAuditEnumeratePositionalTarget:
         local_runner = CliRunner(env=_NO_COLOR_ENV)
         result = local_runner.invoke(
             app,
-            ["audit", "enumerate", "--transport", "stdio", "--command", "not-a-real-server"],
+            ["enumerate", "--transport", "stdio", "--command", "not-a-real-server"],
         )
         assert result.exit_code != 0
         assert "Connection failed" in result.output

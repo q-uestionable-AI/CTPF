@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
+from q_ai.ipi.cli import app
 from q_ai.ipi.tunnel import TunnelStartupError
 
 runner = CliRunner()
@@ -21,7 +21,7 @@ class TestListenTunnelFlag:
     """CLI integration for the ``--tunnel`` flag."""
 
     def test_unknown_provider_exits_with_error(self) -> None:
-        result = runner.invoke(app, ["ipi", "listen", "--tunnel", "ngrok"])
+        result = runner.invoke(app, ["listen", "--tunnel", "ngrok"])
         assert result.exit_code == 1
         assert "Unknown tunnel provider" in result.output
 
@@ -34,7 +34,7 @@ class TestListenTunnelFlag:
             "q_ai.ipi.commands.listen.get_tunnel_adapter",
             return_value=fake_adapter,
         ):
-            result = runner.invoke(app, ["ipi", "listen", "--tunnel", "cloudflare"])
+            result = runner.invoke(app, ["listen", "--tunnel", "cloudflare"])
 
         assert result.exit_code == 1
         assert "not available" in result.output
@@ -50,7 +50,7 @@ class TestListenTunnelFlag:
             patch("q_ai.ipi.commands.listen.get_tunnel_adapter", return_value=fake_adapter),
             patch("q_ai.ipi.commands.listen.start_server") as mock_start,
         ):
-            result = runner.invoke(app, ["ipi", "listen", "--tunnel", "cloudflare"])
+            result = runner.invoke(app, ["listen", "--tunnel", "cloudflare"])
 
         assert result.exit_code == 0, result.output
         fake_adapter.start.assert_called_once_with(local_port=8080)
@@ -74,7 +74,7 @@ class TestListenTunnelFlag:
             patch("q_ai.ipi.commands.listen.get_tunnel_adapter", return_value=fake_adapter),
             patch("q_ai.ipi.commands.listen.start_server") as mock_start,
         ):
-            result = runner.invoke(app, ["ipi", "listen", "--tunnel", "cloudflare"])
+            result = runner.invoke(app, ["listen", "--tunnel", "cloudflare"])
 
         assert result.exit_code == 1
         assert "Failed to start" in result.output
@@ -87,7 +87,7 @@ class TestListenTunnelFlag:
             patch("q_ai.ipi.commands.listen.get_tunnel_adapter") as mock_factory,
             patch("q_ai.ipi.commands.listen.start_server") as mock_start,
         ):
-            result = runner.invoke(app, ["ipi", "listen"])
+            result = runner.invoke(app, ["listen"])
 
         assert result.exit_code == 0, result.output
         mock_factory.assert_not_called()

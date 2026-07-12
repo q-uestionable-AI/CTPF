@@ -14,10 +14,9 @@ _RESET_TABLES = (
     # IPI module
     "ipi_hits",
     "ipi_payloads",
-    # Chain module (step_outputs → executions → runs)
+    # Historical module tables (schema retained for existing DBs)
     "chain_step_outputs",
     "chain_executions",
-    # Other module tables with run_id FK
     "cxp_test_results",
     "rxp_validations",
     "audit_scans",

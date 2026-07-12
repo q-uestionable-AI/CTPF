@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
-from q_ai.cli import app
 from q_ai.ipi.callback_state import CallbackState, state_path
+from q_ai.ipi.cli import app
 from q_ai.ipi.generate_service import GenerateResult
 
 runner = CliRunner()
@@ -63,7 +63,6 @@ class TestGenerateAutoDiscovery:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "generate",
                     "--technique",
                     "white_ink",
@@ -95,7 +94,6 @@ class TestGenerateAutoDiscovery:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "generate",
                     "--callback",
                     "http://explicit:9000",
@@ -128,7 +126,6 @@ class TestGenerateAutoDiscovery:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "generate",
                     "http://positional:7000",
                     "--technique",
@@ -168,7 +165,6 @@ class TestGenerateAutoDiscovery:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "generate",
                     "http://fallback:8080",
                     "--technique",
@@ -209,7 +205,6 @@ class TestGenerateAutoDiscovery:
             result = runner.invoke(
                 app,
                 [
-                    "ipi",
                     "generate",
                     "--technique",
                     "white_ink",
@@ -254,7 +249,7 @@ class TestListenTunnelStateFile:
             patch("q_ai.ipi.commands.listen.write_state", side_effect=_capture_write) as mock_write,
             patch("q_ai.ipi.commands.listen.delete_state", side_effect=_capture_delete),
         ):
-            result = runner.invoke(app, ["ipi", "listen", "--tunnel", "cloudflare"])
+            result = runner.invoke(app, ["listen", "--tunnel", "cloudflare"])
 
         assert result.exit_code == 0, result.output
         mock_start.assert_called_once()
@@ -286,7 +281,7 @@ class TestListenTunnelStateFile:
             patch("q_ai.ipi.commands.listen.write_state"),
             patch("q_ai.ipi.commands.listen.delete_state", side_effect=_capture_delete),
         ):
-            result = runner.invoke(app, ["ipi", "listen", "--tunnel", "cloudflare"])
+            result = runner.invoke(app, ["listen", "--tunnel", "cloudflare"])
 
         # The exception propagates out of typer; result.exception reflects it.
         assert isinstance(result.exception, _SomeError)

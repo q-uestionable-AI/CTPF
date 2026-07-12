@@ -19,7 +19,7 @@ instructed.
 
 These are product invariants, not preferences.
 
-- **Local HTTP binding:** Any local HTTP server (Web UI while it exists, headless callbacks,
+- **Local HTTP binding:** Any local HTTP server (headless IPI callbacks, proxy adapters,
   etc.) binds to `127.0.0.1` only. Never bind to `0.0.0.0` or external interfaces.
 - **API key storage:** API keys go in the OS keyring only. Never store keys in config files,
   environment variables, or source code.
@@ -68,8 +68,9 @@ These are product invariants, not preferences.
 - Type check: mypy
 - Tests: pytest + pytest-asyncio + pytest-timeout
 - Cross-platform: Windows, macOS, Linux
-- Legacy (pending Phase 1 removal unless told otherwise): FastAPI/Jinja2/HTMX Web UI,
-  RXP ML stack, Assist, Chain, Orchestrator, Imports
+- Removed in Phase 1a: `server/` (Web UI), `assist/`, `rxp/`
+- Removed in Phase 1b: `chain/`, `orchestrator/`, `imports/`; inject is
+  fixtures-only (`build_server` + payloads; campaign path stripped)
 
 ## Code Quality Rules
 
@@ -108,15 +109,10 @@ src/q_ai/
 ├── mcp/            # MCP connectivity
 ├── proxy/          # traffic capture / intercept (CTPF center)
 ├── audit/          # capability enumeration / scanners (narrowing)
-├── inject/         # malicious MCP fixtures (campaign path pending strip)
+├── inject/         # malicious MCP fixtures (fixtures-only)
 ├── ipi/            # document generators + headless callback (library)
 ├── cxp/            # coding-assistant context generators (library)
-├── server/         # Web UI (pending Phase 1 removal)
-├── orchestrator/   # workflows (pending Phase 1 removal)
-├── chain/          # attack sequencer (pending Phase 1 removal)
-├── rxp/            # RAG retrieval (pending Phase 1 removal)
-├── imports/        # Garak/PyRIT/etc. (pending Phase 1 removal)
-└── assist/         # in-app assistant (pending Phase 1 removal)
+└── services/       # shared service-layer helpers (db_service)
 
 tests/
 ```

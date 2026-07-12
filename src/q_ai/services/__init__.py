@@ -1,31 +1,7 @@
-"""Service layer for q-ai — shared data-access functions for UI, CLI, and API."""
+"""Shared service-layer helpers for the q-AI research harness.
 
-from q_ai.services.managed_listener import (
-    MANAGER_CLI,
-    MANAGER_WEB_UI,
-    ForeignListenerRecord,
-    ListenerState,
-    ManagedListenerConflictError,
-    ManagedListenerHandle,
-    ManagedListenerStartupError,
-    ManagedListenerStuckStopError,
-    detect_existing_listener,
-    start_adopted_poller,
-    start_managed_listener,
-    stop_managed_listener,
-)
-
-__all__ = [
-    "MANAGER_CLI",
-    "MANAGER_WEB_UI",
-    "ForeignListenerRecord",
-    "ListenerState",
-    "ManagedListenerConflictError",
-    "ManagedListenerHandle",
-    "ManagedListenerStartupError",
-    "ManagedListenerStuckStopError",
-    "detect_existing_listener",
-    "start_adopted_poller",
-    "start_managed_listener",
-    "stop_managed_listener",
-]
+Retains database management helpers used by the core CLI
+(:mod:`q_ai.services.db_service`). Workflow, run, finding, audit,
+evidence, and managed-listener services were removed in CTPF Reconnect
+Phase 1b.
+"""
