@@ -35,6 +35,13 @@ class TestInjectHelp:
         assert "campaign" not in plain
         assert "report" not in plain
 
+    def test_module_entrypoint_exports_app(self) -> None:
+        """``python -m q_ai.inject`` resolves via package ``__main__``."""
+        import importlib
+
+        main = importlib.import_module("q_ai.inject.__main__")
+        assert main.app is app
+
 
 class TestServe:
     """inject serve subcommand."""
