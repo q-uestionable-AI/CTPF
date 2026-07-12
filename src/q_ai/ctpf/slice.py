@@ -1,8 +1,9 @@
-"""Thin CTPF slice: trust-transition records for Pattern 2 and cascade experiments.
+"""CTPF implementation slice: Pattern 2 and cascade trust-transition logic.
 
-Single module (not a package tree). Captures separated tool invocation vs
-external effect, compares baseline vs manipulated runs (including two-hop
-memo cascade), and writes minimal hashed evidence bundles. No CLI verbs here.
+Package entrypoint is :mod:`q_ai.ctpf`. This module holds the implementation
+moved out of the former single-file ``ctpf.py`` after the Phase 5 gate.
+Captures separated tool invocation vs external effect, compares baseline vs
+manipulated runs, and writes minimal hashed evidence bundles. No CLI verbs.
 """
 
 from __future__ import annotations

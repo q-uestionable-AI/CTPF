@@ -108,6 +108,7 @@ src/q_ai/
 ├── core/           # shared DB, models, config
 ├── mcp/            # MCP connectivity
 ├── proxy/          # traffic capture / intercept (CTPF center)
+├── ctpf/           # trust-transition kernel (Pattern 2 + cascade)
 ├── audit/          # capability enumeration / scanners (narrowing)
 ├── inject/         # malicious MCP fixtures (fixtures-only)
 ├── ipi/            # document generators + headless callback (library)
