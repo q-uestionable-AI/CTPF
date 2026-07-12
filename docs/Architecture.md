@@ -2,146 +2,104 @@
 
 ## Purpose
 
-This document records durable architectural invariants for q-AI. It is
-intentionally about system shape, boundaries, and operating model rather than
-route inventories, per-file ownership maps, or refactor planning.
+This document records durable architectural invariants for q-AI after the CTPF
+Reconnect Phase 1 shape cut. It describes system shape, boundaries, and
+operating model — not route inventories or file-by-file ownership.
 
 ## System Shape
 
-q-AI is a local Python application with two operator entry points:
+q-AI is a local Python **CTPF research harness** with one public operator entry
+point: the `qai` CLI.
 
-- the `qai` CLI
-- a localhost web UI launched by `qai ui`
+**Centered substrate:**
 
-Its core security-testing behavior is implemented in peer domain modules:
-
-| Module | Stable responsibility |
+| Area | Responsibility |
 | --- | --- |
-| `audit` | Scan MCP servers for security findings |
-| `proxy` | Intercept and record MCP traffic |
-| `inject` | Run tool-poisoning and prompt-injection campaigns |
-| `ipi` | Generate indirect prompt-injection payloads and track hits |
-| `cxp` | Build poisoned context-file test repos for coding assistants |
-| `rxp` | Measure retrieval poisoning behavior |
-| `chain` | Compose multi-step attack paths across modules |
+| `proxy` | Capture, intercept, live modify, export MCP traffic (Textual TUI) |
+| `mcp` | MCP transports and sessions (stdio, SSE, streamable HTTP) |
+| `core` | Shared models, SQLite persistence, config, credentials, providers |
 
-Those modules are supported by shared layers:
+**Library modules** (not public CLI pillars; used as fixtures / research code):
 
-- `core` for shared models, persistence, configuration, and provider abstractions
-- `mcp` for MCP transport/session handling
-- `orchestrator` for workflow composition and run coordination
-- `services` for shared query/read paths over persisted data
-- `server` for the local web UI
-- `assist` for operator guidance and interpretation
-- `imports` for normalizing external tool results into q-AI's data model
+| Area | Responsibility |
+| --- | --- |
+| `audit` | Capability enumeration / scanners; SARIF export |
+| `ipi` | Document generators + headless callback listener |
+| `cxp` | Coding-assistant context-file generators |
+| `inject` | Malicious MCP fixture servers (`build_server` + payload templates) |
 
-The important architectural fact is that q-AI is not built around a single
-feature surface. It is a set of security-testing modules that share one
-backbone and one persistence model.
+**Removed in Phase 1** (do not restore without explicit instruction): Web UI
+(`server/`), `assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, and the
+inject campaign/scoring path.
+
+Transitional public CLI verbs: `proxy`, `targets`, `runs`, `findings`, `config`,
+`db`, `--version`. New verbs such as `inspect` / `evidence` are deferred until
+a CTPF experiment defines a real interface.
 
 ## Shared Backbone
 
-The backbone of q-AI is the shared run model stored in a local SQLite database.
-The common schema centers on `targets`, `runs`, `findings`, `evidence`, and
-`settings`, with additional module-specific tables for execution data such as
-scan results, proxy sessions, chain executions, generated payloads, and
-retrieval-validation output.
+Persistence is a local SQLite database (`~/.qai/qai.db`). The common schema
+centers on `targets`, `runs`, `findings`, `evidence`, and `settings`, with
+additional tables retained for historical module data (proxy sessions, IPI hits,
+legacy chain/inject/RXP tables may still exist for old DBs even when writers are
+gone).
 
-`WorkflowRunner` turns multi-step operations into a parent workflow run plus
-child module runs. Progress events, findings, completion state, and
-human-in-the-loop pauses all travel through that same run lifecycle. Modules
-that pause for operator action do so through `WAITING_FOR_USER` / resume
-transitions instead of inventing a separate state system.
-
-Imported external-tool results are normalized into the same run/finding/evidence
-model. That keeps native results and imported results queryable through the same
-shared persistence layer.
+`services/db_service.py` provides shared database helpers used by the
+transitional CLI. Other former “service layer” UI/workflow helpers were removed
+with the Web UI and orchestrator.
 
 ## Boundaries and Responsibilities
 
 ### Core Boundary
 
-`core` owns the durable cross-cutting contracts: database access, schema
-migration, shared data models, configuration, credential lookup, provider/model
-abstractions, and run guidance persistence. It is the layer other parts of the
-system converge on instead of each module inventing its own storage or provider
-contract.
+`core` owns durable cross-cutting contracts: database access, schema migration,
+shared data models, configuration, credential lookup (OS keyring), and
+provider/model abstractions.
 
 ### MCP Boundary
 
-`mcp` centralizes client connections to MCP servers over stdio, SSE, and
-streamable HTTP. Modules that talk to MCP servers build on that shared async
-connection boundary rather than embedding transport setup into the web layer.
+`mcp` centralizes client connections to MCP servers. Proxy adapters and other
+callers build on that shared async transport boundary rather than embedding
+transport setup ad hoc.
 
-### Orchestration Boundary
+### Proxy Boundary
 
-`orchestrator` owns workflow registration, parent/child run coordination,
-progress/finding event emission, and resume gates. Module adapters are the seam
-between workflow execution and module-specific engines; they let workflows
-compose modules without moving module logic into the web server.
+`proxy` is the CTPF observation center: bidirectional message capture, optional
+intercept with forward / modify / drop, session persistence, and export. Live
+mutation of server→client tool results is a first-class research path; full
+agent counterfactual replay is not assumed.
 
-### Query Boundary
+### Operator Surface
 
-`services` provides shared read/query helpers over persisted runs, findings, and
-evidence. Route handlers and other callers reuse those query paths instead of
-re-implementing database reads independently.
+`cli.py` is the only public product surface. Library Typer apps (for example
+`python -m q_ai.ipi`, `python -m q_ai.inject`) may remain for fixture workflows
+but are not root `qai` pillars.
 
-### Operator Surfaces
+## LLM Boundary
 
-`server` provides the local web UI with FastAPI, Jinja templates, static assets,
-and WebSocket event fan-out. `cli.py` provides the command-line entry point and
-launches the web UI on `127.0.0.1`. The browser surface and CLI are operator
-interfaces over the same backend model, not separate products with separate
-state.
-
-## LLM and Assistant Boundary
-
-q-AI keeps its model-provider boundary in shared core code. `core.llm` defines
-the provider-agnostic protocol and normalized response types.
-`core.providers` holds provider/model registry information and model-discovery
-logic. The current LiteLLM-backed implementation is housed in
-`core.llm_litellm.py`.
-
-The stable architectural point is the boundary, not the current library choice:
-provider-facing code is isolated behind shared interfaces instead of being
-spread across modules.
-
-The assistant is an operator-aid layer on top of that boundary. It builds a
-local knowledge index, retrieves product and user reference material, and
-assembles prompts that distinguish trusted product content, user-provided
-reference material, and untrusted scan-derived content. It helps operators
-navigate and interpret q-AI; it is not the platform backbone and does not own
-workflow orchestration, persistence, or module composition.
+Provider-facing code stays behind shared core interfaces (`core.llm`,
+`core.providers`, LiteLLM-backed implementation). Modules that need models
+consume that boundary rather than embedding provider SDKs directly.
 
 ## Security and Trust Invariants
 
-- `qai ui` binds the web UI to `127.0.0.1`, making the browser surface a local
-  operator interface rather than a network service.
-- Non-secret settings and credentials are handled through separate paths:
-  ordinary settings live in config/database stores, while credential lookup is
-  resolved separately by `core.config`.
-- Assistant prompt assembly treats target-derived scan content as untrusted data
-  and delimits it accordingly instead of treating it as instructions.
-- IPI bridge communication uses a dedicated token file for internal
-  server-to-server authentication.
-- The IPI callback listener optionally exposes itself via a tunnel adapter
+- Any local HTTP listener (IPI headless callback, proxy listen adapters) binds
+  to `127.0.0.1` only — never `0.0.0.0` or external interfaces for product
+  surfaces.
+- Non-secret settings and credentials use separate paths: ordinary settings in
+  config/database stores; API keys only in the OS keyring.
+- The IPI callback listener may optionally expose itself via a tunnel adapter
   (`--tunnel cloudflare`) for testing remote/cloud AI targets. When tunneled,
   the listener trusts only the `CF-Connecting-IP` header for source-IP
-  resolution and ignores `X-Forwarded-For` to prevent spoofing. Public-exposure
-  hardening (body-size limits, per-IP rate limiting, conservative timeouts) is
-  applied only in tunnel mode; local-only listener behavior is unchanged.
-- At most one tunneled IPI callback listener may exist on a host at a time
-  (managed or CLI-launched). The active-callback state file
-  (`~/.qai/active-callback`) is single-writer and records a `manager` tag
-  identifying the writer (`web-ui` for listeners spawned by the local web
-  server, `cli` for ones started from a terminal). The web server reattaches
-  to its own managed listeners after a restart by reading the state file and
-  matching the `manager` tag; foreign listeners are surfaced read-only, never
-  adopted, and never have their state file deleted. Parallel tunnels are
-  deliberately out of scope for the current single-writer contract.
+  resolution and ignores `X-Forwarded-For`. Public-exposure hardening
+  (body-size limits, per-IP rate limiting, conservative timeouts) applies in
+  tunnel mode; local-only listener behavior is unchanged.
+- At most one tunneled IPI callback listener should exist on a host at a time.
+  The active-callback state file (`~/.qai/active-callback`) is the single-writer
+  coordination point for CLI-launched listeners.
 
 ## What This Document Intentionally Omits
 
-This document does not try to freeze the current FastAPI route surface, template
-inventory, or file-by-file ownership map. Those details change faster than the
-architectural boundaries above and should be verified in source when needed.
+This document does not freeze Mintlify page trees, CTPF experiment schemas, or
+fixture catalogs. Those evolve with Pattern 2+ work and should be verified in
+source or the lab vault plan when needed.

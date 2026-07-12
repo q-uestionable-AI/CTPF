@@ -17,17 +17,17 @@ If you discover a security vulnerability in {q-AI}, please report it responsibly
 {q-AI} is a security testing tool. Vulnerabilities in the tool itself (not in targets being tested) are in scope:
 
 - Command injection in CLI argument handling
-- Credential leakage in reports, logs, or the web UI
+- Credential leakage in reports, logs, or local artifacts
 - API key exposure via the keyring integration or config files
 - Dependency vulnerabilities with exploitable paths
-- Unsafe deserialization of scan results, MCP messages, or campaign data
-- Web UI vulnerabilities (SSRF via infrastructure health checks, path traversal in file outputs)
+- Unsafe deserialization of findings, MCP messages, or fixture payloads
+- Local listener issues (IPI headless callback, proxy HTTP listen adapters) including SSRF or path traversal in file outputs
 
 Out of scope: vulnerabilities in third-party MCP servers or AI systems discovered *by* the tool — those should be reported to the relevant vendor.
 
 ## Evidence at Rest
 
-{q-AI} stores run artifacts locally in plaintext under `~/.qai/`. The SQLite database at `~/.qai/qai.db` includes IPI callback hit bodies, headers, source IPs, user agents, sweep and probe scoring data, and other finding evidence. Payload documents, exports, and backups live alongside it under the same directory.
+{q-AI} stores run artifacts locally in plaintext under `~/.qai/`. The SQLite database at `~/.qai/qai.db` includes IPI callback hit bodies, headers, source IPs, user agents, proxy session data, and other finding evidence. Payload documents, exports, and backups live alongside it under the same directory.
 
 Access control relies on filesystem permissions. On POSIX, `~/.qai/` is created with mode `0o700`; any pre-existing wider mode is narrowed on the next qai startup. On Windows the default user-profile ACLs apply — qai does not set additional ACL restrictions there.
 

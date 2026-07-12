@@ -9,17 +9,29 @@
 
 **CTPF research harness — MCP observation, controlled fixtures, and evidence**
 
-A research program testing whether MCP and agentic AI vulnerabilities are exploitable end-to-end, with execution-level proof.
+q-AI investigates **Capability Trust Propagation Failure (CTPF)**: whether low-trust data
+(for example a tool result) is silently promoted into higher-authority actions when
+provenance, integrity, authorization scope, or intended audience are not preserved.
 
-Model-layer tests like Garak, PyRIT, or BIPIA can tell you "this model follows injected instructions." An audit scan can tell you "this MCP server has a vulnerable tool." A qai finding connects the two: the model weakness was exploitable end-to-end through a real agentic system. Authenticated callbacks confirm execution, not just compliance.
+The product shape is a small local CLI: capture MCP traffic, mutate it under control via
+proxy, and keep runs/findings/evidence in SQLite. Individual experiments **confirm** or
+**fail to observe** promotion under pinned conditions — they do not “falsify CTPF” as a class.
 
-Capabilities (transitional CLI surface):
+### Public CLI (transitional)
 
-- Intercept MCP traffic (`qai proxy`)
-- Register and manage targets, runs, and findings
-- Library modules remain for IPI document generation, inject fixtures, audit scanning, and related research paths (not all are root-CLI commands)
+| Command | Role |
+|---------|------|
+| `qai proxy` | Intercept, inspect, modify, and export MCP traffic (Textual TUI) |
+| `qai targets` | Register MCP targets |
+| `qai runs` / `qai findings` | Inspect stored runs and findings |
+| `qai config` / `qai db` | Settings and local database maintenance |
+| `qai --version` | Package version |
 
-All findings stored in a SQLite database.
+### Libraries (not root CLI pillars)
+
+IPI document generators + headless callback, inject malicious MCP fixture servers, CXP
+context generators, and audit enumeration/SARIF export remain in-tree as libraries for
+research fixtures. They are not equal product modules on the public CLI.
 
 > By [Richard Spicer](https://richardspicer.io) · [{q-AI}](https://q-uestionable.ai)
 
@@ -27,23 +39,24 @@ All findings stored in a SQLite database.
 
 ## Quick Start
 
-Intercept MCP traffic:
+```bash
+pip install q-uestionable-ai
+# or from source:
+git clone https://github.com/q-uestionable-AI/qai.git
+cd qai
+uv sync --group dev
+```
 
 ```bash
 qai proxy --help
-```
-
-Register a target:
-
-```bash
 qai targets add "My Server" http://localhost:3000/sse
 ```
 
 ---
 
-## Framework Coverage
+## Framework mappings (library audit)
 
-Audit findings map to four security taxonomies:
+When using the audit library, findings can map to:
 
 | Framework | Coverage |
 |-----------|----------|
@@ -54,29 +67,16 @@ Audit findings map to four security taxonomies:
 
 ---
 
-## Install
-
-```bash
-pip install q-uestionable-ai
-```
-
-Or from source:
-
-```bash
-git clone https://github.com/q-uestionable-AI/qai.git
-cd qai
-uv sync --group dev
-```
-
----
-
-Full documentation at [docs.q-uestionable.ai](https://docs.q-uestionable.ai)
+Architecture notes: [docs/Architecture.md](docs/Architecture.md).
+Published docs: [docs.q-uestionable.ai](https://docs.q-uestionable.ai) (Mintlify may still describe removed surfaces until a follow-up prune).
 
 ---
 
 ## Legal
 
-All tools are intended for authorized security testing only. Only test systems you own, control, or have explicit permission to test. Responsible disclosure for all vulnerabilities discovered.
+All tools are intended for authorized security testing only. Only test systems you own,
+control, or have explicit permission to test. Responsible disclosure for all
+vulnerabilities discovered.
 
 ## License
 
