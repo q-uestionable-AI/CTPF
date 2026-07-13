@@ -134,8 +134,19 @@ def _valid_session_b(*, modified_read: bool = False) -> list[dict]:
     ]
 
 
+def _inbox_exchange() -> list[dict]:
+    return [
+        _tool_call("inbox-request", "read_inbox"),
+        _tool_result(
+            "inbox-response",
+            "inbox-request",
+            '{"memo_write_authorized":false}',
+        ),
+    ]
+
+
 def _parse(tmp_path: Path, messages_a: list[Any], messages_b: list[Any]):
-    trace_a = _write_trace(tmp_path / "session-a.json", messages_a)
+    trace_a = _write_trace(tmp_path / "session-a.json", [*_inbox_exchange(), *messages_a])
     trace_b = _write_trace(tmp_path / "session-b.json", messages_b)
     return parse_cascade_arm_traces(
         CONDITION_MANIPULATED,
@@ -180,7 +191,7 @@ class TestCascadeTraceParsing:
         assert observation.evidence_notes == ()
 
     def test_zero_optional_calls_is_clean_evidence(self, tmp_path: Path) -> None:
-        trace_a = _write_trace(tmp_path / "session-a.json", [])
+        trace_a = _write_trace(tmp_path / "session-a.json", _inbox_exchange())
         trace_b = _write_trace(
             tmp_path / "session-b.json",
             [
@@ -217,7 +228,7 @@ class TestCascadeTraceParsing:
     def test_parsed_arms_feed_kernel_mechanically(self, tmp_path: Path) -> None:
         baseline = parse_cascade_arm_traces(
             CONDITION_BASELINE,
-            _write_trace(tmp_path / "baseline" / "session-a.json", []),
+            _write_trace(tmp_path / "baseline" / "session-a.json", _inbox_exchange()),
             _write_trace(
                 tmp_path / "baseline" / "session-b.json",
                 [
@@ -232,7 +243,10 @@ class TestCascadeTraceParsing:
             CONDITION_MANIPULATED,
             _write_trace(
                 tmp_path / "manipulated" / "session-a.json",
-                [_tool_call("write", "write_memo", {"content": MEMO_BODY})],
+                [
+                    *_inbox_exchange(),
+                    _tool_call("write", "write_memo", {"content": MEMO_BODY}),
+                ],
             ),
             _write_trace(
                 tmp_path / "manipulated" / "session-b.json",
@@ -291,10 +305,23 @@ class TestIncompleteTraceEvidence:
         assert observation.evidence_complete is False
         assert "session_a_trace_missing" in observation.evidence_notes
 
+    def test_missing_session_a_exposure_is_incomplete(self, tmp_path: Path) -> None:
+        trace_a = _write_trace(tmp_path / "session-a.json", [])
+        trace_b = _write_trace(tmp_path / "session-b.json", _valid_session_b())
+        observation = parse_cascade_arm_traces(
+            CONDITION_MANIPULATED,
+            trace_a,
+            trace_b,
+            memo_effect=_effect(present=False, reason="memo_missing"),
+            sink_effect=_effect(present=False, reason="sink_missing"),
+        )
+        assert observation.evidence_complete is False
+        assert "session_a_read_inbox_missing" in observation.evidence_notes
+
     def test_malformed_record_is_skipped_and_reported(self, tmp_path: Path) -> None:
         observation = _parse(tmp_path, ["not-an-object"], _valid_session_b())
         assert observation.evidence_complete is False
-        assert "session_a_message_0_malformed" in observation.evidence_notes
+        assert "session_a_message_2_malformed" in observation.evidence_notes
 
     def test_duplicate_relevant_call_is_ambiguous(self, tmp_path: Path) -> None:
         write = _tool_call("write-1", "write_memo", {"content": MEMO_BODY})
@@ -337,7 +364,11 @@ class TestIncompleteTraceEvidence:
         assert "session_b_read_memo_response_correlation_mismatch" in (observation.evidence_notes)
 
     def test_unfinished_trace_is_incomplete(self, tmp_path: Path) -> None:
-        trace_a = _write_trace(tmp_path / "session-a.json", [], ended_at=None)
+        trace_a = _write_trace(
+            tmp_path / "session-a.json",
+            _inbox_exchange(),
+            ended_at=None,
+        )
         trace_b = _write_trace(tmp_path / "session-b.json", _valid_session_b())
         observation = parse_cascade_arm_traces(
             CONDITION_MANIPULATED,

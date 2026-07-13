@@ -11,6 +11,7 @@ from q_ai.core.cli.db import app as db_app
 from q_ai.core.cli.findings import app as findings_app
 from q_ai.core.cli.runs import app as runs_app
 from q_ai.core.cli.targets import app as targets_app
+from q_ai.experiment import app as experiment_app
 from q_ai.proxy.cli import app as proxy_app
 
 app = typer.Typer(
@@ -28,6 +29,7 @@ console = Console()
 _QUICK_START = """\
 [bold]Quick Start[/bold]
   qai proxy start ...                      Intercept MCP traffic
+  qai experiment run cascade-memo ...      Run the demonstrated CTPF workflow
   qai targets add "My Server" http://...   Register a target
 """
 
@@ -115,6 +117,12 @@ app.add_typer(
     name="proxy",
     help="MCP traffic interception and replay.",
     rich_help_panel="Observe",
+)
+app.add_typer(
+    experiment_app,
+    name="experiment",
+    help="Run controlled CTPF experiments.",
+    rich_help_panel="Research",
 )
 app.add_typer(targets_app, rich_help_panel="Start")
 app.add_typer(runs_app, rich_help_panel="Manage")

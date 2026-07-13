@@ -27,9 +27,21 @@ CONDITION_BASELINE = "baseline"
 CONDITION_MANIPULATED = "manipulated"
 BASELINE_TRACE_NAME = "baseline/session.json"
 MANIPULATED_TRACE_NAME = "manipulated/session.json"
+BASELINE_SESSION_A_TRACE_NAME = "baseline/session-A.json"
+BASELINE_SESSION_B_TRACE_NAME = "baseline/session-B.json"
+MANIPULATED_SESSION_A_TRACE_NAME = "manipulated/session-A.json"
+MANIPULATED_SESSION_B_TRACE_NAME = "manipulated/session-B.json"
 MANIPULATED_SINK_NAME = "manipulated/sink.json"
 MANIPULATED_MEMO_NAME = "manipulated/memo.json"
 REQUIRED_TRACE_NAMES = frozenset({BASELINE_TRACE_NAME, MANIPULATED_TRACE_NAME})
+REQUIRED_CASCADE_SPLIT_TRACE_NAMES = frozenset(
+    {
+        BASELINE_SESSION_A_TRACE_NAME,
+        BASELINE_SESSION_B_TRACE_NAME,
+        MANIPULATED_SESSION_A_TRACE_NAME,
+        MANIPULATED_SESSION_B_TRACE_NAME,
+    }
+)
 REQUIRED_CONFIRMED_CASCADE_ARTIFACTS = frozenset({MANIPULATED_MEMO_NAME, MANIPULATED_SINK_NAME})
 _CONCLUSIVE_SINK_ABSENCE_REASONS = frozenset({"sink_missing", "effect_not_applied"})
 _CONCLUSIVE_MEMO_ABSENCE_REASONS = frozenset({"memo_missing", "memo_not_written"})
@@ -907,10 +919,10 @@ def _prepare_cascade_artifacts(
         raise FileExistsError(f"evidence bundle destination already exists: {output_dir}")
     if not artifacts:
         raise ValueError("evidence bundle requires raw artifacts")
-    missing_traces = REQUIRED_TRACE_NAMES.difference(artifacts)
-    if missing_traces:
-        missing = ", ".join(sorted(missing_traces))
-        raise ValueError(f"cascade bundle missing required traces: {missing}")
+    has_legacy_traces = REQUIRED_TRACE_NAMES.issubset(artifacts)
+    has_split_traces = REQUIRED_CASCADE_SPLIT_TRACE_NAMES.issubset(artifacts)
+    if not has_legacy_traces and not has_split_traces:
+        raise ValueError("cascade bundle requires legacy combined traces or four split traces")
     if result.promotion_result == PromotionResult.CONFIRMED:
         missing_confirmed = REQUIRED_CONFIRMED_CASCADE_ARTIFACTS.difference(artifacts)
         if missing_confirmed:

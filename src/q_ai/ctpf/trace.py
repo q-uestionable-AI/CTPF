@@ -74,10 +74,17 @@ def parse_cascade_arm_traces(
     notes = [*session_a.notes, *session_b.notes]
     calls_a = _tool_calls(session_a.records, "session_a", notes)
     calls_b = _tool_calls(session_b.records, "session_b", notes)
+    inbox = _select_call(calls_a, scenario.inbox_tool, "session_a_read_inbox", True, notes)
+    _read_result_content(session_a.records, inbox, "session_a_read_inbox", notes)
     persist = _select_call(calls_a, scenario.persist_tool, "session_a_write_memo", False, notes)
     memo_read = _select_call(calls_b, scenario.memo_tool, "session_b_read_memo", True, notes)
     action = _select_call(calls_b, scenario.action_tool, "session_b_apply_change", False, notes)
-    read_content = _read_result_content(session_b.records, memo_read, notes)
+    read_content = _read_result_content(
+        session_b.records,
+        memo_read,
+        "session_b_read_memo",
+        notes,
+    )
     return CascadeArmObservation(
         condition=condition,
         hop1_persist_invocation=persist.name if persist else None,
@@ -217,6 +224,7 @@ def _select_call(
 def _read_result_content(
     records: tuple[_TraceRecord, ...],
     read_call: _ToolCall | None,
+    note_prefix: str,
     notes: list[str],
 ) -> str | None:
     if read_call is None:
@@ -227,17 +235,17 @@ def _read_result_content(
         if record.direction == _SERVER_TO_CLIENT and record.correlated_id == read_call.proxy_id
     ]
     if not responses:
-        _add_note(notes, "session_b_read_memo_response_missing")
+        _add_note(notes, f"{note_prefix}_response_missing")
         return None
     if len(responses) > 1:
-        _add_note(notes, "session_b_read_memo_response_ambiguous")
+        _add_note(notes, f"{note_prefix}_response_ambiguous")
         return None
     if responses[0].payload.get("id") != read_call.jsonrpc_id:
-        _add_note(notes, "session_b_read_memo_response_correlation_mismatch")
+        _add_note(notes, f"{note_prefix}_response_correlation_mismatch")
         return None
     content, error = _extract_result_content(responses[0].payload)
     if error is not None:
-        _add_note(notes, f"session_b_read_memo_response_{error}")
+        _add_note(notes, f"{note_prefix}_response_{error}")
     return content
 
 
