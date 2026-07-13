@@ -41,6 +41,7 @@ from q_ai.ctpf.slice import (
     write_cascade_evidence_bundle,
     write_evidence_bundle,
 )
+from q_ai.ctpf.trace import parse_cascade_arm_traces
 
 __all__ = [
     "ARTIFACTS_DIRNAME",
@@ -73,6 +74,7 @@ __all__ = [
     "compare_cascade_baseline_manipulated",
     "observe_memo_persistence",
     "observe_sink_effect",
+    "parse_cascade_arm_traces",
     "sha256_file",
     "write_cascade_evidence_bundle",
     "write_evidence_bundle",
