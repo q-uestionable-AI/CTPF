@@ -11,7 +11,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import anyio
 from mcp.shared.message import SessionMessage
@@ -305,3 +305,22 @@ class TestStreamableHttpClientAdapterClose:
         assert not adapter._closed
         await adapter.close()
         assert adapter._closed
+
+    async def test_close_allows_uvicorn_to_release_listener(self) -> None:
+        """Close requests graceful Uvicorn exit instead of cancelling it immediately."""
+        adapter, _ = await _enter_streamable_http_client_adapter()
+        server = MagicMock()
+        server.should_exit = False
+
+        async def serve_until_shutdown() -> None:
+            while not server.should_exit:
+                await asyncio.sleep(0)
+
+        adapter._uvicorn_server = server
+        adapter._server_task = asyncio.create_task(serve_until_shutdown())
+
+        await adapter.close()
+
+        assert server.should_exit
+        assert adapter._server_task.done()
+        assert not adapter._server_task.cancelled()

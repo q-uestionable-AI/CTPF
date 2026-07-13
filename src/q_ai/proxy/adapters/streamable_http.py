@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 # Sentinel pushed into the read queue when the SDK stream ends
 _STREAM_CLOSED = object()
+_UVICORN_CONNECTION_SHUTDOWN_TIMEOUT = 1
+_UVICORN_TASK_SHUTDOWN_TIMEOUT = 2.0
 
 
 class StreamableHttpServerAdapter:
@@ -247,6 +249,7 @@ class StreamableHttpClientAdapter:
             port=self._port,
             log_level="warning",
             loop="none",
+            timeout_graceful_shutdown=_UVICORN_CONNECTION_SHUTDOWN_TIMEOUT,
         )
         self._uvicorn_server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(
@@ -344,6 +347,8 @@ class StreamableHttpClientAdapter:
             return
         self._closed = True
         await self._read_queue.put(_STREAM_CLOSED)
+        if self._uvicorn_server is not None:
+            self._uvicorn_server.should_exit = True
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -352,13 +357,23 @@ class StreamableHttpClientAdapter:
             self._writer_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._writer_task
-        if self._uvicorn_server is not None:
-            self._uvicorn_server.should_exit = True
         if self._connect_task and not self._connect_task.done():
             self._connect_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._connect_task
-        if self._server_task and not self._server_task.done():
+        await self._wait_for_http_server_exit()
+
+    async def _wait_for_http_server_exit(self) -> None:
+        """Let Uvicorn release its listener before falling back to cancellation."""
+        if self._server_task is None or self._server_task.done():
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._server_task),
+                timeout=_UVICORN_TASK_SHUTDOWN_TIMEOUT,
+            )
+        except TimeoutError:
+            logger.warning("Uvicorn shutdown timed out; cancelling the server task")
             self._server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._server_task

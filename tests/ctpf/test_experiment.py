@@ -7,6 +7,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -214,7 +215,7 @@ class _FakeOperator:
     ) -> None:
         assert os.environ["QAI_CASCADE_RUN_ID"] == "test-run"
         assert prompt and model == "Composer 2.5"
-        assert endpoint == "http://127.0.0.1:8765/mcp"
+        assert endpoint == "http://127.0.0.1:8765/mcp/"
         self.calls.append((condition.value, session_name))
 
 
@@ -269,6 +270,117 @@ class TestSessionLifecycle:
         assert payload["ended_at"] is not None
         assert payload["metadata"]["run_id"] == "test-run"
         assert operator.calls == [("baseline", "A")]
+
+    async def test_run_session_waits_before_listener_reuse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A stopped listener stays unbound briefly before its port is reused."""
+        delays: list[float] = []
+
+        async def record_delay(delay: float) -> None:
+            delays.append(delay)
+
+        monkeypatch.setattr(experiment, "ProxyRuntime", _FakeRuntime)
+        monkeypatch.setattr(experiment.asyncio, "sleep", record_delay)
+        options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path)
+
+        await experiment._run_session(
+            experiment._Condition.BASELINE,
+            "A",
+            experiment.SESSION_A_PROMPT,
+            tmp_path / "session-A.json",
+            "test-run",
+            True,
+            options,
+            "python fixture.py",
+            _FakeOperator(),
+            None,
+        )
+
+        assert delays == [experiment._LISTENER_RESTART_COOLDOWN]
+
+
+class TestConsoleSessionIsolation:
+    """Interactive sessions use fresh Python worker processes."""
+
+    @staticmethod
+    def _spec(tmp_path: Path) -> experiment._SessionSpec:
+        return experiment._SessionSpec(
+            condition=experiment._Condition.BASELINE,
+            name="A",
+            prompt=experiment.SESSION_A_PROMPT,
+            trace_path=tmp_path / "session-A.json",
+            run_id="isolated-run",
+            reset=True,
+            mutation=None,
+            mutation_path=None,
+        )
+
+    def test_worker_command_uses_python_module_entrypoint(self, tmp_path: Path) -> None:
+        """Worker command is list-form and invokes the hidden q_ai session command."""
+        spec = self._spec(tmp_path)
+        options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path, 8877)
+
+        command = experiment._session_worker_command(spec, options)
+
+        assert command[:6] == [
+            experiment.sys.executable,
+            "-m",
+            "q_ai",
+            "experiment",
+            "run",
+            "_session",
+        ]
+        assert "--reset" in command
+        assert command[command.index("--trace-path") + 1] == str(spec.trace_path)
+
+    def test_worker_failure_is_reported(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A nonzero isolated worker exit becomes an experiment error."""
+        spec = self._spec(tmp_path)
+        options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path)
+
+        def fail_worker(command: list[str], *, check: bool) -> SimpleNamespace:
+            assert command[5] == "_session"
+            assert check is False
+            return SimpleNamespace(returncode=9)
+
+        monkeypatch.setattr(experiment.subprocess, "run", fail_worker)
+
+        with pytest.raises(experiment.ExperimentError, match="exit code 9"):
+            experiment._run_console_session_process(spec, options)
+
+    async def test_console_capture_uses_isolated_worker(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Console capture delegates to the process boundary instead of ProxyRuntime."""
+        calls: list[experiment._SessionSpec] = []
+
+        def record_worker(
+            spec: experiment._SessionSpec,
+            _options: experiment.CascadeExperimentOptions,
+        ) -> None:
+            calls.append(spec)
+
+        monkeypatch.setattr(experiment, "_run_console_session_process", record_worker)
+        spec = self._spec(tmp_path)
+        options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path)
+
+        await experiment._capture_session(
+            spec,
+            options,
+            "python fixture.py",
+            experiment._ConsoleOperator(),
+        )
+
+        assert calls == [spec]
 
 
 def _condition_result(
@@ -376,6 +488,12 @@ class TestExperimentCli:
         assert result.exit_code == 0
         assert "--model" in result.output
         assert "--output-root" in result.output
+
+    def test_hidden_session_worker_is_not_listed(self) -> None:
+        """The process-isolation worker remains internal CLI plumbing."""
+        result = _cli_runner.invoke(root_app, ["experiment", "run", "--help"])
+        assert result.exit_code == 0
+        assert "_session" not in result.output
 
     def test_repo_output_is_rejected_before_live_run(self) -> None:
         result = _cli_runner.invoke(

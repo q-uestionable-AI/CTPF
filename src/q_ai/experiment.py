@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from collections.abc import Iterator
@@ -64,6 +65,7 @@ SESSION_B_PROMPT = (
 
 _AGENT_PIN = "Cursor Agent (cursor-vscode)"
 _FIXTURE_WORK_DIRNAME = "qai-cascade-memo"
+_LISTENER_RESTART_COOLDOWN = 5.0
 _RUNTIME_START_TIMEOUT = 10.0
 
 
@@ -114,6 +116,18 @@ class _ConditionFiles:
 
 
 @dataclass(frozen=True)
+class _SessionSpec:
+    condition: _Condition
+    name: str
+    prompt: str
+    trace_path: Path
+    run_id: str
+    reset: bool
+    mutation: _CascadeInboxMutation | None
+    mutation_path: Path | None
+
+
+@dataclass(frozen=True)
 class _ConditionResult:
     condition: _Condition
     files: _ConditionFiles
@@ -144,6 +158,7 @@ class _ConsoleOperator:
         typer.echo(f"\n[{condition.value}] Session {session_name}")
         typer.echo(f"Model: {model}")
         typer.echo(f"MCP endpoint: {endpoint}")
+        typer.echo("Reload ctpf-cascade in Cursor and verify that 6 tools are enabled.")
         typer.echo("Open a fresh Cursor Agent conversation and submit this prompt:\n")
         typer.echo(prompt)
         await asyncio.to_thread(input, "\nPress Enter after the agent session is complete...")
@@ -171,6 +186,45 @@ def run_cascade_memo_cli(
     typer.echo(f"Series complete: {result.root}")
     typer.echo(f"Primary result: {result.primary.promotion_result.value}")
     typer.echo(f"Hardened result: {result.hardened.promotion_result.value}")
+
+
+@run_app.command("_session", hidden=True)
+def run_cascade_session_worker_cli(  # noqa: PLR0913
+    condition: Annotated[str, typer.Option()],
+    session_name: Annotated[str, typer.Option()],
+    trace_path: Annotated[Path, typer.Option()],
+    run_id: Annotated[str, typer.Option()],
+    model: Annotated[str, typer.Option()],
+    listen_port: Annotated[int, typer.Option()],
+    reset: Annotated[bool, typer.Option("--reset/--no-reset")],
+    mutation_path: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Run one isolated interactive cascade session."""
+    selected_condition = _Condition(condition)
+    if session_name not in {"A", "B"}:
+        raise ExperimentError("session name must be A or B")
+    prompt = SESSION_A_PROMPT if session_name == "A" else SESSION_B_PROMPT
+    mutation = _mutation_for(selected_condition) if session_name == "A" else None
+    if mutation is not None and mutation_path is None:
+        raise ExperimentError("mutation path is required for a mutated session")
+    options = CascadeExperimentOptions(model, trace_path.parent, listen_port)
+    asyncio.run(
+        _run_session(
+            selected_condition,
+            session_name,
+            prompt,
+            trace_path,
+            run_id,
+            reset,
+            options,
+            _fixture_command(),
+            _ConsoleOperator(),
+            mutation,
+        )
+    )
+    if mutation is not None and mutation_path is not None:
+        mutation.validate()
+        _write_json(mutation_path, mutation.record())
 
 
 async def run_cascade_memo(
@@ -265,33 +319,97 @@ async def _capture_condition_sessions(
     operator: _Operator,
     mutation: _CascadeInboxMutation | None,
 ) -> None:
+    session_a = _SessionSpec(
+        condition=condition,
+        name="A",
+        prompt=SESSION_A_PROMPT,
+        trace_path=files.session_a,
+        run_id=files.run_id,
+        reset=True,
+        mutation=mutation,
+        mutation_path=files.mutation if mutation is not None else None,
+    )
+    session_b = _SessionSpec(
+        condition=condition,
+        name="B",
+        prompt=SESSION_B_PROMPT,
+        trace_path=files.session_b,
+        run_id=files.run_id,
+        reset=False,
+        mutation=None,
+        mutation_path=None,
+    )
+    await _capture_session(session_a, options, fixture_command, operator)
+    await _capture_session(session_b, options, fixture_command, operator)
+
+
+async def _capture_session(
+    spec: _SessionSpec,
+    options: CascadeExperimentOptions,
+    fixture_command: str,
+    operator: _Operator,
+) -> None:
+    if isinstance(operator, _ConsoleOperator):
+        await asyncio.to_thread(_run_console_session_process, spec, options)
+        return
     await _run_session(
-        condition,
-        "A",
-        SESSION_A_PROMPT,
-        files.session_a,
-        files.run_id,
-        True,
+        spec.condition,
+        spec.name,
+        spec.prompt,
+        spec.trace_path,
+        spec.run_id,
+        spec.reset,
         options,
         fixture_command,
         operator,
-        mutation,
+        spec.mutation,
     )
-    if mutation is not None:
-        mutation.validate()
-        _write_json(files.mutation, mutation.record())
-    await _run_session(
-        condition,
-        "B",
-        SESSION_B_PROMPT,
-        files.session_b,
-        files.run_id,
-        False,
-        options,
-        fixture_command,
-        operator,
-        None,
-    )
+    if spec.mutation is not None and spec.mutation_path is not None:
+        spec.mutation.validate()
+        _write_json(spec.mutation_path, spec.mutation.record())
+
+
+def _run_console_session_process(
+    spec: _SessionSpec,
+    options: CascadeExperimentOptions,
+) -> None:
+    # Command arguments come only from validated internal session state.
+    completed = subprocess.run(_session_worker_command(spec, options), check=False)  # noqa: S603
+    if completed.returncode != 0:
+        raise ExperimentError(
+            f"isolated {spec.condition.value} session {spec.name} failed "
+            f"with exit code {completed.returncode}"
+        )
+
+
+def _session_worker_command(
+    spec: _SessionSpec,
+    options: CascadeExperimentOptions,
+) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "q_ai",
+        "experiment",
+        "run",
+        "_session",
+        "--condition",
+        spec.condition.value,
+        "--session-name",
+        spec.name,
+        "--trace-path",
+        str(spec.trace_path),
+        "--run-id",
+        spec.run_id,
+        "--model",
+        options.model,
+        "--listen-port",
+        str(options.listen_port),
+        "--reset" if spec.reset else "--no-reset",
+    ]
+    if spec.mutation_path is not None:
+        command.extend(("--mutation-path", str(spec.mutation_path)))
+    return command
 
 
 async def _run_session(  # noqa: PLR0913
@@ -319,7 +437,7 @@ async def _run_session(  # noqa: PLR0913
         listen_transport=Transport.STREAMABLE_HTTP,
         listen_port=options.listen_port,
     )
-    endpoint = f"http://127.0.0.1:{options.listen_port}/mcp"
+    endpoint = f"http://127.0.0.1:{options.listen_port}/mcp/"
     runtime_task: asyncio.Task[None] | None = None
     with _cascade_environment(run_id, reset):
         try:
@@ -339,6 +457,7 @@ async def _run_session(  # noqa: PLR0913
                     await runtime_task
             finally:
                 store.save(trace_path)
+                await asyncio.sleep(_LISTENER_RESTART_COOLDOWN)
 
 
 async def _wait_until_runtime_ready(
@@ -450,7 +569,7 @@ def _write_primary_bundle(
         model=options.model.strip(),
         configuration={
             "fixture_command": fixture_command,
-            "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp",
+            "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp/",
             "qai_version": __version__,
         },
     )
@@ -720,7 +839,7 @@ def _write_series_manifest(  # noqa: PLR0913
         "status": status,
         "agent": _AGENT_PIN,
         "model": options.model.strip(),
-        "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp",
+        "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp/",
         "prompts": {"session_a": SESSION_A_PROMPT, "session_b": SESSION_B_PROMPT},
         "conditions": {
             condition.value: _condition_manifest(result, path.parent)
