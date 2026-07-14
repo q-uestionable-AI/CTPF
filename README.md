@@ -3,7 +3,7 @@
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
 [![CI](https://github.com/q-uestionable-AI/CTPF/actions/workflows/ci.yml/badge.svg)](https://github.com/q-uestionable-AI/CTPF/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/q-uestionable-AI/CTPF/actions/workflows/codeql.yml/badge.svg)](https://github.com/q-uestionable-AI/CTPF/actions/workflows/codeql.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11–3.13](https://img.shields.io/badge/python-3.11--3.13-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Docs](https://img.shields.io/badge/docs-ctpf.q--uestionable.ai-8b5cf6)](https://ctpf.q-uestionable.ai)
 
@@ -14,8 +14,10 @@ CTPF Research Harness investigates **Capability Trust Propagation Failure (CTPF)
 provenance, integrity, authorization scope, or intended audience are not preserved.
 
 The product shape is a small local CLI: capture MCP traffic, mutate it under control via
-proxy, and keep runs/findings/evidence in SQLite. Individual experiments **confirm** or
-**fail to observe** promotion under pinned conditions — they do not “falsify CTPF” as a class.
+proxy, and keep core target, run, and finding records in SQLite. Controlled experiments write
+traces, effect artifacts, and hashed evidence bundles to a required operator-selected output
+directory outside the Git checkout. Individual experiments **confirm** or **fail to observe**
+promotion under pinned conditions — they do not “falsify CTPF” as a class.
 
 ### Public CLI
 
@@ -42,12 +44,10 @@ research fixtures. They are not equal product modules on the public CLI.
 
 ## Quick Start
 
+Install from PyPI:
+
 ```bash
 pip install ctpf
-# or from source:
-git clone https://github.com/q-uestionable-AI/CTPF.git
-cd CTPF
-uv sync --group dev
 ```
 
 Starting with v0.12.0, the former `q-uestionable-ai` distribution is a compatibility package
@@ -56,6 +56,16 @@ that installs the same-version `ctpf` distribution.
 ```bash
 ctpf proxy --help
 ctpf targets add "My Server" http://localhost:3000/sse
+```
+
+Or run from source:
+
+```bash
+git clone https://github.com/q-uestionable-AI/CTPF.git
+cd CTPF
+uv sync --group dev
+uv run ctpf proxy --help
+uv run ctpf targets add "My Server" http://localhost:3000/sse
 ```
 
 ---
@@ -67,14 +77,13 @@ When using the audit library, findings can map to:
 | Framework | Coverage |
 |-----------|----------|
 | [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) | All 10 categories |
-| [OWASP Agentic Top 10](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) | All 10 categories |
+| [OWASP Agentic Top 10](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) | Nine categories (ASI01–ASI06, ASI08–ASI10); ASI07 is not mapped |
 | [MITRE ATLAS](https://atlas.mitre.org/) | Technique-level mapping per finding category |
 | [CWE](https://cwe.mitre.org/) | Weakness-level mapping per finding category |
 
 ---
 
-Architecture notes: [docs/Architecture.md](docs/Architecture.md).
-Published docs: [ctpf.q-uestionable.ai](https://ctpf.q-uestionable.ai).
+Published documentation: [ctpf.q-uestionable.ai](https://ctpf.q-uestionable.ai).
 
 ---
 

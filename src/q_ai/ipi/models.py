@@ -261,8 +261,7 @@ class PayloadType(StrEnum):
 
     Note:
         Non-callback payload types require the --dangerous CLI flag and are
-        intended for authorized security testing only. See docs/Roadmap.md
-        for safety gating requirements.
+        intended for authorized security testing only.
 
     Example:
         >>> from q_ai.ipi.models import PayloadType
