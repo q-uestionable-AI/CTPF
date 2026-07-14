@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PROVIDER_TIMEOUT_S = 60.0
 _ASSISTANT_TIMEOUT_S = 120.0
+_CUSTOM_OPENAI_ALLOWED_PARAMS = ("reasoning_effort",)
 
 # litellm error messages indicating no tool support
 _NO_TOOL_SUPPORT_SIGNALS = [
@@ -261,6 +262,13 @@ class LiteLLMClient:
             request["api_base"] = self._api_base
         if self._api_key:
             request["api_key"] = self._api_key
+        allowed_openai_params = [
+            name
+            for name in _CUSTOM_OPENAI_ALLOWED_PARAMS
+            if self._api_base and provider == "openai" and name in self._generation_parameters
+        ]
+        if allowed_openai_params:
+            request["allowed_openai_params"] = allowed_openai_params
         request.update(self._generation_parameters)
 
         try:
