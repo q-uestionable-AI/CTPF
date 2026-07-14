@@ -37,6 +37,8 @@ The former `qai` command remains a compatibility alias for `ctpf` during the ide
 IPI document generators + headless callback, inject malicious MCP fixture servers, CXP
 context generators, and audit enumeration/SARIF export remain in-tree as libraries for
 research fixtures. They are not equal product modules on the public CLI.
+Audit-library findings can include OWASP MCP, OWASP Agentic, MITRE ATLAS, and CWE
+identifiers; audit remains a library capability rather than a root CLI surface.
 
 > By [Richard Spicer](https://richardspicer.io) · [q-uestionable-AI](https://q-uestionable.ai)
 
@@ -67,19 +69,6 @@ uv sync --group dev
 uv run ctpf proxy --help
 uv run ctpf targets add "My Server" http://localhost:3000/sse
 ```
-
----
-
-## Framework mappings (library audit)
-
-When using the audit library, findings can map to:
-
-| Framework | Coverage |
-|-----------|----------|
-| [OWASP MCP Top 10](https://owasp.org/www-project-mcp-top-10/) | All 10 categories |
-| [OWASP Agentic Top 10](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) | Nine categories (ASI01–ASI06, ASI08–ASI10); ASI07 is not mapped |
-| [MITRE ATLAS](https://atlas.mitre.org/) | Technique-level mapping per finding category |
-| [CWE](https://cwe.mitre.org/) | Weakness-level mapping per finding category |
 
 ---
 
