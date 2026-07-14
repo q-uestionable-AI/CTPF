@@ -120,7 +120,11 @@ class TestLiteLLMClient:
             client = LiteLLMClient(
                 api_base="https://models.example.test/v1",
                 api_key="secret-key",
-                generation_parameters={"temperature": 0.0, "seed": 7},
+                generation_parameters={
+                    "temperature": 0.0,
+                    "seed": 7,
+                    "reasoning_effort": "none",
+                },
             )
             await client.complete(
                 model="openai/model-a",
@@ -135,6 +139,7 @@ class TestLiteLLMClient:
         assert kwargs["max_tokens"] == 321
         assert kwargs["temperature"] == 0.0
         assert kwargs["seed"] == 7
+        assert kwargs["reasoning_effort"] == "none"
 
     async def test_complete_provider_error(self) -> None:
         """acompletion exception raises ProviderError."""

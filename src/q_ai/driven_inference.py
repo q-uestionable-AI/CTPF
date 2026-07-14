@@ -19,6 +19,7 @@ _DRIVER_NAME = "openai-compatible"
 _DEFAULT_MAX_TOKENS = 1024
 _DEFAULT_MAX_ROUNDS = 12
 _MCP_CONNECT_TIMEOUT_SECONDS = 10.0
+_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 
 
 class DrivenInferenceError(RuntimeError):
@@ -38,6 +39,7 @@ class OpenAICompatibleTargetProfile:
         max_tokens: Fixed maximum generated tokens per inference round.
         temperature: Optional fixed sampling temperature.
         seed: Optional fixed provider seed.
+        reasoning_effort: Optional fixed provider reasoning effort.
     """
 
     target_id: str
@@ -48,19 +50,22 @@ class OpenAICompatibleTargetProfile:
     max_tokens: int = _DEFAULT_MAX_TOKENS
     temperature: float | None = None
     seed: int | None = None
+    reasoning_effort: str | None = None
 
     @property
     def litellm_model(self) -> str:
         """Return the LiteLLM routing form for an OpenAI-compatible model."""
         return f"openai/{self.model}"
 
-    def generation_parameters(self) -> dict[str, int | float]:
+    def generation_parameters(self) -> dict[str, int | float | str]:
         """Return supported fixed generation parameters for provider calls."""
-        parameters: dict[str, int | float] = {}
+        parameters: dict[str, int | float | str] = {}
         if self.temperature is not None:
             parameters["temperature"] = self.temperature
         if self.seed is not None:
             parameters["seed"] = self.seed
+        if self.reasoning_effort is not None:
+            parameters["reasoning_effort"] = self.reasoning_effort
         return parameters
 
     def evidence_payload(self) -> dict[str, Any]:
@@ -137,6 +142,7 @@ def _profile_from_target(target: Target) -> OpenAICompatibleTargetProfile:
         max_tokens=_max_tokens(metadata),
         temperature=_optional_float(metadata, "temperature", minimum=0.0, maximum=2.0),
         seed=_optional_int(metadata, "seed", None),
+        reasoning_effort=_optional_choice(metadata, "reasoning_effort", _REASONING_EFFORTS),
     )
 
 
@@ -180,6 +186,25 @@ def _max_tokens(metadata: dict[str, Any]) -> int:
     parsed = _optional_int(metadata, "max_tokens", _DEFAULT_MAX_TOKENS, minimum=1)
     if parsed is None:
         raise DrivenInferenceError("inference target 'max_tokens' could not be resolved")
+    return parsed
+
+
+def _optional_choice(
+    metadata: dict[str, Any],
+    key: str,
+    choices: frozenset[str],
+) -> str | None:
+    value = metadata.get(key)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise DrivenInferenceError(f"inference target {key!r} must be a string")
+    parsed = value.strip()
+    if not parsed:
+        return None
+    if parsed not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise DrivenInferenceError(f"inference target {key!r} must be one of: {allowed}")
     return parsed
 
 

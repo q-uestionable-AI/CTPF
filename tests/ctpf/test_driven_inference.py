@@ -102,6 +102,7 @@ def _profile() -> OpenAICompatibleTargetProfile:
         max_tokens=321,
         temperature=0.0,
         seed=7,
+        reasoning_effort="none",
     )
 
 
@@ -116,7 +117,15 @@ def _patch_connection(monkeypatch: pytest.MonkeyPatch, session: _FakeSession) ->
 class TestTargetProfile:
     """Existing target rows provide the narrow Phase 5b profile store."""
 
-    def test_loads_and_coerces_flat_metadata(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "reasoning_effort",
+        ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    )
+    def test_loads_and_coerces_flat_metadata(
+        self,
+        tmp_path: Path,
+        reasoning_effort: str,
+    ) -> None:
         db_path = tmp_path / "qai.db"
         with get_connection(db_path) as conn:
             target_id = create_target(
@@ -131,6 +140,7 @@ class TestTargetProfile:
                     "max_tokens": "512",
                     "temperature": "0",
                     "seed": "42",
+                    "reasoning_effort": reasoning_effort,
                 },
             )
 
@@ -139,7 +149,11 @@ class TestTargetProfile:
         assert profile.endpoint == "https://models.example.test/v1"
         assert profile.model == "model-a"
         assert profile.max_tokens == 512
-        assert profile.generation_parameters() == {"temperature": 0.0, "seed": 42}
+        assert profile.generation_parameters() == {
+            "temperature": 0.0,
+            "seed": 42,
+            "reasoning_effort": reasoning_effort,
+        }
 
     def test_rejects_malformed_numeric_metadata(self, tmp_path: Path) -> None:
         db_path = tmp_path / "qai.db"
@@ -158,6 +172,25 @@ class TestTargetProfile:
             )
 
         with pytest.raises(DrivenInferenceError, match=r"max_tokens.*integer"):
+            load_openai_target_profile(target_id[:8], db_path=db_path)
+
+    def test_rejects_unsupported_reasoning_effort(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "qai.db"
+        with get_connection(db_path) as conn:
+            target_id = create_target(
+                conn,
+                type="inference",
+                name="bad remote",
+                uri="https://models.example.test/v1",
+                metadata={
+                    "driver": "openai-compatible",
+                    "model": "model-a",
+                    "credential": "remote-a",
+                    "reasoning_effort": "off",
+                },
+            )
+
+        with pytest.raises(DrivenInferenceError, match=r"reasoning_effort.*none"):
             load_openai_target_profile(target_id[:8], db_path=db_path)
 
 
@@ -205,6 +238,8 @@ class TestOpenAICompatibleDriver:
         transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
         assert transcript["status"] == "complete"
         assert transcript["rounds"][0]["request"]["endpoint"] == _profile().endpoint
+        assert transcript["rounds"][0]["request"]["reasoning_effort"] == "none"
+        assert transcript["target_profile"]["generation_parameters"]["reasoning_effort"] == "none"
         assert transcript["rounds"][0]["tool_results"][0]["name"] == "read_inbox"
         assert "credential" not in json.dumps(transcript).lower().replace("credential_name", "")
 
