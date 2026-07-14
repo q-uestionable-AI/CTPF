@@ -40,6 +40,13 @@ from q_ai.driven_inference import (
     OpenAICompatibleTargetProfile,
     load_openai_target_profile,
 )
+from q_ai.external_runtime import (
+    ClaudeCodeDriver,
+    ClaudeCodeTargetProfile,
+    ExperimentTargetProfile,
+    ExternalRuntimeError,
+    load_experiment_target_profile,
+)
 from q_ai.mcp.models import Direction, Transport
 from q_ai.proxy.intercept import InterceptDecision, InterceptEngine
 from q_ai.proxy.models import InterceptAction, ProxyMessage
@@ -65,6 +72,7 @@ SESSION_B_PROMPT = (
 
 _AGENT_PIN = "Cursor Agent (cursor-vscode)"
 _DRIVEN_AGENT_PIN = "CTPF OpenAI-compatible driven-inference driver"
+_CLAUDE_CODE_AGENT_PIN = "Claude Code CLI external agent runtime"
 _FIXTURE_WORK_DIRNAME = "qai-cascade-memo"
 _LISTENER_RESTART_COOLDOWN = 5.0
 _RUNTIME_START_TIMEOUT = 10.0
@@ -97,7 +105,7 @@ class CascadeExperimentOptions:
         model: Exact model label selected in manual Cursor mode.
         output_root: External directory that will contain the series.
         listen_port: Loopback Streamable HTTP port used by Cursor.
-        target: Optional inference target ID for fully driven mode.
+        target: Optional inference or external-runtime target ID for fully driven mode.
         db_path: Optional database path override for tests.
     """
 
@@ -247,6 +255,33 @@ class _DrivenOperator:
         await driver.run(prompt, endpoint, inference_path)
 
 
+class _ClaudeCodeOperator:
+    def __init__(self, profile: ClaudeCodeTargetProfile) -> None:
+        self._profile = profile
+
+    async def wait_for_completion(
+        self,
+        condition: _Condition,
+        session_name: str,
+        prompt: str,
+        model: str,
+        endpoint: str,
+        inference_path: Path | None,
+    ) -> None:
+        if inference_path is None:
+            raise ExperimentError("external-runtime sessions require a transcript path")
+        driver = ClaudeCodeDriver(self._profile)
+        await driver.run(prompt, endpoint, inference_path)
+
+
+def _operator_for(profile: ExperimentTargetProfile | None) -> _Operator:
+    if isinstance(profile, ClaudeCodeTargetProfile):
+        return _ClaudeCodeOperator(profile)
+    if isinstance(profile, OpenAICompatibleTargetProfile):
+        return _DrivenOperator(profile)
+    return _ConsoleOperator()
+
+
 @run_app.command(
     "cascade-memo",
     epilog=(
@@ -254,7 +289,10 @@ class _DrivenOperator:
         "--meta driver=openai-compatible --meta model=MODEL "
         "--meta credential=KEYRING_NAME\n"
         "Store the key with: ctpf config set-credential KEYRING_NAME\n"
-        "Matrix: repeat --target for at least two profiles and set --trials from 3 to 5"
+        "External runtime: ctpf targets add NAME claude --type agent-runtime "
+        "--meta driver=claude-code-cli --meta model=EXACT_MODEL_ID "
+        "--meta timeout_seconds=300\n"
+        "Matrix: repeat --target for at least two inference profiles and set --trials from 3 to 5"
     ),
 )
 def run_cascade_memo_cli(
@@ -268,7 +306,9 @@ def run_cascade_memo_cli(
     ] = None,
     target: Annotated[
         list[str] | None,
-        typer.Option(help="Inference target ID prefix; repeat for a driven multi-model matrix."),
+        typer.Option(
+            help="Experiment target ID prefix; repeat inference targets for a driven matrix."
+        ),
     ] = None,
     trials: Annotated[
         int,
@@ -336,7 +376,7 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
     options = CascadeExperimentOptions(model, trace_path.parent, listen_port, target, db_path)
     profile = _load_target_profile(options)
     options = _resolved_options(options, profile)
-    operator: _Operator = _DrivenOperator(profile) if profile else _ConsoleOperator()
+    operator = _operator_for(profile)
     asyncio.run(
         _run_session(
             selected_condition,
@@ -368,7 +408,7 @@ async def run_cascade_memo(
 
     Args:
         options: Model, output, and loopback listener settings.
-        operator: Completion seam for the external Cursor agent runtime.
+        operator: Completion seam for the selected agent runtime.
         series_id: Optional preallocated child ID for matrix orchestration.
         condition_order: Optional complete permutation of cascade conditions.
 
@@ -384,7 +424,7 @@ async def run_cascade_memo(
     series_root = output_root / series_id
     series_root.mkdir()
     manifest_path = series_root / "run-manifest.json"
-    operator = operator or (_DrivenOperator(profile) if profile else _ConsoleOperator())
+    operator = operator or _operator_for(profile)
     results: dict[_Condition, _ConditionResult] = {}
     if profile is not None:
         _write_json(series_root / _TARGET_PROFILE_NAME, profile.evidence_payload())
@@ -695,7 +735,7 @@ async def _capture_session(
     fixture_command: str,
     operator: _Operator,
 ) -> None:
-    if isinstance(operator, (_ConsoleOperator, _DrivenOperator)):
+    if isinstance(operator, (_ConsoleOperator, _DrivenOperator, _ClaudeCodeOperator)):
         await asyncio.to_thread(_run_console_session_process, spec, options)
         return
     await _run_session(
@@ -880,7 +920,7 @@ def _complete_series(
     options: CascadeExperimentOptions,
     fixture_command: str,
     results: dict[_Condition, _ConditionResult],
-    profile: OpenAICompatibleTargetProfile | None = None,
+    profile: ExperimentTargetProfile | None = None,
 ) -> CascadeExperimentResult:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -914,7 +954,7 @@ def _write_primary_bundle(
     fixture_command: str,
     results: dict[_Condition, _ConditionResult],
     primary: TrustTransition,
-    profile: OpenAICompatibleTargetProfile | None,
+    profile: ExperimentTargetProfile | None,
 ) -> EvidenceBundle:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -948,7 +988,7 @@ def _write_primary_bundle(
 def _bundle_artifacts(
     series_root: Path,
     results: dict[_Condition, _ConditionResult],
-    profile: OpenAICompatibleTargetProfile | None,
+    profile: ExperimentTargetProfile | None,
 ) -> dict[str, Path]:
     artifacts: dict[str, Path] = {
         _HARDENED_TRANSITION_NAME: series_root / _HARDENED_TRANSITION_NAME,
@@ -973,8 +1013,17 @@ def _bundle_artifacts(
 
 
 def _profile_pin_configuration(
-    profile: OpenAICompatibleTargetProfile,
+    profile: ExperimentTargetProfile,
 ) -> dict[str, str]:
+    if isinstance(profile, ClaudeCodeTargetProfile):
+        return {
+            "target_id": profile.target_id,
+            "target_name": profile.name,
+            "external_runtime_driver": "claude-code-cli",
+            "external_runtime_executable": profile.executable,
+            "external_runtime_version": profile.runtime_version,
+            "external_runtime_timeout_seconds": str(profile.timeout_seconds),
+        }
     return {
         "target_id": profile.target_id,
         "target_name": profile.name,
@@ -990,7 +1039,9 @@ def _profile_pin_configuration(
     }
 
 
-def _agent_pin(profile: OpenAICompatibleTargetProfile | None) -> str:
+def _agent_pin(profile: ExperimentTargetProfile | None) -> str:
+    if isinstance(profile, ClaudeCodeTargetProfile):
+        return _CLAUDE_CODE_AGENT_PIN
     return _DRIVEN_AGENT_PIN if profile is not None else _AGENT_PIN
 
 
@@ -1244,18 +1295,18 @@ def _validated_condition_order(
 
 def _load_target_profile(
     options: CascadeExperimentOptions,
-) -> OpenAICompatibleTargetProfile | None:
+) -> ExperimentTargetProfile | None:
     if not options.target or not options.target.strip():
         return None
     try:
-        return load_openai_target_profile(options.target, db_path=options.db_path)
-    except DrivenInferenceError as exc:
+        return load_experiment_target_profile(options.target, db_path=options.db_path)
+    except ExternalRuntimeError as exc:
         raise ExperimentError(str(exc)) from exc
 
 
 def _resolved_options(
     options: CascadeExperimentOptions,
-    profile: OpenAICompatibleTargetProfile | None,
+    profile: ExperimentTargetProfile | None,
 ) -> CascadeExperimentOptions:
     if profile is None:
         return options
@@ -1302,7 +1353,7 @@ def _write_series_manifest(  # noqa: PLR0913
     condition_order: tuple[_Condition, ...],
     error: str | None = None,
     completed: CascadeExperimentResult | None = None,
-    profile: OpenAICompatibleTargetProfile | None = None,
+    profile: ExperimentTargetProfile | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "schema_version": 1,

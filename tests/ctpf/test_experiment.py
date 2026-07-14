@@ -27,6 +27,7 @@ from q_ai.ctpf import (
     PromotionResult,
 )
 from q_ai.driven_inference import OpenAICompatibleTargetProfile
+from q_ai.external_runtime import ClaudeCodeTargetProfile
 from q_ai.mcp.models import Direction, Transport
 from q_ai.proxy.models import ProxyMessage
 
@@ -200,6 +201,25 @@ class TestExperimentBoundary:
             assert os.environ["QAI_CASCADE_RESET"] == "1"
         assert os.environ["QAI_CASCADE_RUN_ID"] == "prior"
         assert "QAI_CASCADE_RESET" not in os.environ
+
+    def test_external_runtime_profile_selects_claude_operator_and_pins(self) -> None:
+        profile = ClaudeCodeTargetProfile(
+            target_id="1234567890abcdef",
+            name="claude research runtime",
+            executable="C:/tools/claude.exe",
+            model="claude-opus-4-1-20250805",
+            runtime_version="2.1.114 (Claude Code)",
+            timeout_seconds=90,
+        )
+
+        operator = experiment._operator_for(profile)
+        configuration = experiment._profile_pin_configuration(profile)
+
+        assert isinstance(operator, experiment._ClaudeCodeOperator)
+        assert experiment._agent_pin(profile) == experiment._CLAUDE_CODE_AGENT_PIN
+        assert configuration["external_runtime_driver"] == "claude-code-cli"
+        assert configuration["external_runtime_version"] == profile.runtime_version
+        assert configuration["external_runtime_timeout_seconds"] == "90"
 
 
 class _FakeOperator:
@@ -571,6 +591,7 @@ class TestExperimentCli:
         assert "--trials" in result.output
         assert "--output-root" in result.output
         assert "driver=openai-compatible" in result.output
+        assert "driver=claude-code-cli" in result.output
 
     def test_hidden_session_worker_is_not_listed(self) -> None:
         """The process-isolation worker remains internal CLI plumbing."""
