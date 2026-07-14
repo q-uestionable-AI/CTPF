@@ -17,7 +17,7 @@ from q_ai.core.cli.prompt import (
 from q_ai.core.db import create_target, get_connection, get_target, list_targets
 from q_ai.services.db_service import delete_target, resolve_partial_id
 
-app = typer.Typer(name="targets", help="Manage scan targets.", no_args_is_help=True)
+app = typer.Typer(name="targets", help="Manage MCP and inference targets.", no_args_is_help=True)
 console = Console()
 
 

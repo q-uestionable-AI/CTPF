@@ -11,7 +11,7 @@ import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -22,12 +22,6 @@ from mcp.types import JSONRPCMessage
 
 from q_ai import __version__
 from q_ai.ctpf import (
-    BASELINE_SESSION_A_TRACE_NAME,
-    BASELINE_SESSION_B_TRACE_NAME,
-    MANIPULATED_MEMO_NAME,
-    MANIPULATED_SESSION_A_TRACE_NAME,
-    MANIPULATED_SESSION_B_TRACE_NAME,
-    MANIPULATED_SINK_NAME,
     CascadeArmObservation,
     CascadeExperimentContext,
     CascadeMemoScenario,
@@ -39,6 +33,12 @@ from q_ai.ctpf import (
     observe_sink_effect,
     parse_cascade_arm_traces,
     write_cascade_evidence_bundle,
+)
+from q_ai.driven_inference import (
+    DrivenInferenceError,
+    OpenAICompatibleDriver,
+    OpenAICompatibleTargetProfile,
+    load_openai_target_profile,
 )
 from q_ai.mcp.models import Direction, Transport
 from q_ai.proxy.intercept import InterceptDecision, InterceptEngine
@@ -64,9 +64,12 @@ SESSION_B_PROMPT = (
 )
 
 _AGENT_PIN = "Cursor Agent (cursor-vscode)"
+_DRIVEN_AGENT_PIN = "CTPF OpenAI-compatible driven-inference driver"
 _FIXTURE_WORK_DIRNAME = "qai-cascade-memo"
 _LISTENER_RESTART_COOLDOWN = 5.0
 _RUNTIME_START_TIMEOUT = 10.0
+_TARGET_PROFILE_NAME = "target-profile.json"
+_HARDENED_TRANSITION_NAME = "hardened/trust-transition.json"
 
 
 class ExperimentError(RuntimeError):
@@ -81,17 +84,21 @@ class _Condition(StrEnum):
 
 @dataclass(frozen=True)
 class CascadeExperimentOptions:
-    """Inputs for one operator-driven cascade series.
+    """Inputs for one manual or driven cascade series.
 
     Args:
-        model: Exact model label selected by the operator.
+        model: Exact model label selected in manual Cursor mode.
         output_root: External directory that will contain the series.
         listen_port: Loopback Streamable HTTP port used by Cursor.
+        target: Optional inference target ID for fully driven mode.
+        db_path: Optional database path override for tests.
     """
 
-    model: str
+    model: str | None
     output_root: Path
     listen_port: int = DEFAULT_LISTEN_PORT
+    target: str | None = None
+    db_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -110,9 +117,12 @@ class _ConditionFiles:
     root: Path
     session_a: Path
     session_b: Path
+    session_a_inference: Path
+    session_b_inference: Path
     memo: Path
     sink: Path
     mutation: Path
+    observation: Path
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,7 @@ class _SessionSpec:
     reset: bool
     mutation: _CascadeInboxMutation | None
     mutation_path: Path | None
+    inference_path: Path | None
 
 
 @dataclass(frozen=True)
@@ -142,6 +153,7 @@ class _Operator(Protocol):
         prompt: str,
         model: str,
         endpoint: str,
+        inference_path: Path | None,
     ) -> None:
         """Wait until the operator completes one fresh agent session."""
 
@@ -154,6 +166,7 @@ class _ConsoleOperator:
         prompt: str,
         model: str,
         endpoint: str,
+        inference_path: Path | None,
     ) -> None:
         typer.echo(f"\n[{condition.value}] Session {session_name}")
         typer.echo(f"Model: {model}")
@@ -164,20 +177,55 @@ class _ConsoleOperator:
         await asyncio.to_thread(input, "\nPress Enter after the agent session is complete...")
 
 
-@run_app.command("cascade-memo")
+class _DrivenOperator:
+    def __init__(self, profile: OpenAICompatibleTargetProfile) -> None:
+        self._profile = profile
+
+    async def wait_for_completion(
+        self,
+        condition: _Condition,
+        session_name: str,
+        prompt: str,
+        model: str,
+        endpoint: str,
+        inference_path: Path | None,
+    ) -> None:
+        if inference_path is None:
+            raise ExperimentError("driven sessions require an inference transcript path")
+        driver = OpenAICompatibleDriver(self._profile)
+        await driver.run(prompt, endpoint, inference_path)
+
+
+@run_app.command(
+    "cascade-memo",
+    epilog=(
+        "Driven setup: ctpf targets add NAME API_BASE --type inference "
+        "--meta driver=openai-compatible --meta model=MODEL "
+        "--meta credential=KEYRING_NAME\n"
+        "Store the key with: ctpf config set-credential KEYRING_NAME"
+    ),
+)
 def run_cascade_memo_cli(
-    model: Annotated[str, typer.Option(help="Exact model label selected in Cursor.")],
     output_root: Annotated[
         Path,
         typer.Option(help="External research directory; Git checkouts are rejected."),
     ],
+    model: Annotated[
+        str | None,
+        typer.Option(help="Exact model label selected in Cursor manual mode."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option(help="Inference target ID prefix for OpenAI-compatible driven mode."),
+    ] = None,
     listen_port: Annotated[
         int,
-        typer.Option(help="Loopback Streamable HTTP port already configured in Cursor."),
+        typer.Option(help="Loopback Streamable HTTP port used by the experiment proxy."),
     ] = DEFAULT_LISTEN_PORT,
+    db_path: Annotated[Path | None, typer.Option(hidden=True)] = None,
 ) -> None:
     """Run the baseline, manipulated, and hardened cascade conditions."""
-    options = CascadeExperimentOptions(model, output_root, listen_port)
+    options = CascadeExperimentOptions(model, output_root, listen_port, target, db_path)
     try:
         result = asyncio.run(run_cascade_memo(options))
     except (ExperimentError, OSError, RuntimeError, ValueError) as exc:
@@ -194,10 +242,13 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
     session_name: Annotated[str, typer.Option()],
     trace_path: Annotated[Path, typer.Option()],
     run_id: Annotated[str, typer.Option()],
-    model: Annotated[str, typer.Option()],
     listen_port: Annotated[int, typer.Option()],
     reset: Annotated[bool, typer.Option("--reset/--no-reset")],
+    model: Annotated[str | None, typer.Option()] = None,
+    target: Annotated[str | None, typer.Option()] = None,
     mutation_path: Annotated[Path | None, typer.Option()] = None,
+    inference_path: Annotated[Path | None, typer.Option()] = None,
+    db_path: Annotated[Path | None, typer.Option(hidden=True)] = None,
 ) -> None:
     """Run one isolated interactive cascade session."""
     selected_condition = _Condition(condition)
@@ -207,7 +258,10 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
     mutation = _mutation_for(selected_condition) if session_name == "A" else None
     if mutation is not None and mutation_path is None:
         raise ExperimentError("mutation path is required for a mutated session")
-    options = CascadeExperimentOptions(model, trace_path.parent, listen_port)
+    options = CascadeExperimentOptions(model, trace_path.parent, listen_port, target, db_path)
+    profile = _load_target_profile(options)
+    options = _resolved_options(options, profile)
+    operator: _Operator = _DrivenOperator(profile) if profile else _ConsoleOperator()
     asyncio.run(
         _run_session(
             selected_condition,
@@ -218,8 +272,9 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
             reset,
             options,
             _fixture_command(),
-            _ConsoleOperator(),
+            operator,
             mutation,
+            inference_path,
         )
     )
     if mutation is not None and mutation_path is not None:
@@ -242,14 +297,18 @@ async def run_cascade_memo(
         Completed paths and causal results.
     """
     output_root = _validate_options(options)
+    profile = _load_target_profile(options)
+    options = _resolved_options(options, profile)
     fixture_command = _fixture_command()
     series_id = _new_series_id()
     series_root = output_root / series_id
     series_root.mkdir()
     manifest_path = series_root / "run-manifest.json"
-    operator = operator or _ConsoleOperator()
+    operator = operator or (_DrivenOperator(profile) if profile else _ConsoleOperator())
     results: dict[_Condition, _ConditionResult] = {}
-    _write_series_manifest(manifest_path, options, series_id, "running", results)
+    if profile is not None:
+        _write_json(series_root / _TARGET_PROFILE_NAME, profile.evidence_payload())
+    _write_series_manifest(manifest_path, options, series_id, "running", results, profile=profile)
     try:
         for condition in _Condition:
             result = await _run_condition(
@@ -261,8 +320,21 @@ async def run_cascade_memo(
                 operator,
             )
             results[condition] = result
-            _write_series_manifest(manifest_path, options, series_id, "running", results)
-        completed = _complete_series(series_root, options, fixture_command, results)
+            _write_series_manifest(
+                manifest_path,
+                options,
+                series_id,
+                "running",
+                results,
+                profile=profile,
+            )
+        completed = _complete_series(
+            series_root,
+            options,
+            fixture_command,
+            results,
+            profile,
+        )
     except BaseException as exc:
         _write_series_manifest(
             manifest_path,
@@ -271,6 +343,7 @@ async def run_cascade_memo(
             "failed",
             results,
             error=f"{type(exc).__name__}: {exc}",
+            profile=profile,
         )
         raise
     _write_series_manifest(
@@ -280,6 +353,7 @@ async def run_cascade_memo(
         "complete",
         results,
         completed=completed,
+        profile=profile,
     )
     return completed
 
@@ -307,7 +381,7 @@ async def _run_condition(
     _copy_if_present(memo_source, files.memo)
     _copy_if_present(sink_source, files.sink)
     observation = _observe_condition(condition, files)
-    _write_json(files.root / "observation.json", _observation_payload(observation))
+    _write_json(files.observation, _observation_payload(observation))
     return _ConditionResult(condition, files, observation)
 
 
@@ -328,6 +402,7 @@ async def _capture_condition_sessions(
         reset=True,
         mutation=mutation,
         mutation_path=files.mutation if mutation is not None else None,
+        inference_path=files.session_a_inference if options.target else None,
     )
     session_b = _SessionSpec(
         condition=condition,
@@ -338,6 +413,7 @@ async def _capture_condition_sessions(
         reset=False,
         mutation=None,
         mutation_path=None,
+        inference_path=files.session_b_inference if options.target else None,
     )
     await _capture_session(session_a, options, fixture_command, operator)
     await _capture_session(session_b, options, fixture_command, operator)
@@ -349,7 +425,7 @@ async def _capture_session(
     fixture_command: str,
     operator: _Operator,
 ) -> None:
-    if isinstance(operator, _ConsoleOperator):
+    if isinstance(operator, (_ConsoleOperator, _DrivenOperator)):
         await asyncio.to_thread(_run_console_session_process, spec, options)
         return
     await _run_session(
@@ -363,6 +439,7 @@ async def _capture_session(
         fixture_command,
         operator,
         spec.mutation,
+        spec.inference_path,
     )
     if spec.mutation is not None and spec.mutation_path is not None:
         spec.mutation.validate()
@@ -402,14 +479,20 @@ def _session_worker_command(
         str(spec.trace_path),
         "--run-id",
         spec.run_id,
-        "--model",
-        options.model,
         "--listen-port",
         str(options.listen_port),
         "--reset" if spec.reset else "--no-reset",
     ]
     if spec.mutation_path is not None:
         command.extend(("--mutation-path", str(spec.mutation_path)))
+    if spec.inference_path is not None:
+        command.extend(("--inference-path", str(spec.inference_path)))
+    if options.target:
+        command.extend(("--target", options.target))
+    else:
+        command.extend(("--model", _model(options)))
+    if options.db_path is not None:
+        command.extend(("--db-path", str(options.db_path)))
     return command
 
 
@@ -424,8 +507,10 @@ async def _run_session(  # noqa: PLR0913
     fixture_command: str,
     operator: _Operator,
     mutation: _CascadeInboxMutation | None,
+    inference_path: Path | None = None,
 ) -> None:
-    store = _session_store(condition, session_name, run_id, fixture_command, options.model)
+    model = _model(options)
+    store = _session_store(condition, session_name, run_id, fixture_command, model)
     pipeline = PipelineSession(
         session_store=store,
         intercept_engine=InterceptEngine(rule=mutation),
@@ -448,8 +533,9 @@ async def _run_session(  # noqa: PLR0913
                 condition,
                 session_name,
                 prompt,
-                options.model,
+                model,
                 endpoint,
+                inference_path,
             )
         finally:
             try:
@@ -524,6 +610,7 @@ def _complete_series(
     options: CascadeExperimentOptions,
     fixture_command: str,
     results: dict[_Condition, _ConditionResult],
+    profile: OpenAICompatibleTargetProfile | None = None,
 ) -> CascadeExperimentResult:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -536,13 +623,17 @@ def _complete_series(
         baseline.observation,
         hardened.observation,
     )
+    _write_json(
+        series_root / _HARDENED_TRANSITION_NAME,
+        _transition_payload(hardened_result),
+    )
     bundle = _write_primary_bundle(
         series_root,
         options,
         fixture_command,
-        baseline,
-        manipulated,
+        results,
         primary,
+        profile,
     )
     return CascadeExperimentResult(series_root, bundle, primary, hardened_result)
 
@@ -551,28 +642,24 @@ def _write_primary_bundle(
     series_root: Path,
     options: CascadeExperimentOptions,
     fixture_command: str,
-    baseline: _ConditionResult,
-    manipulated: _ConditionResult,
+    results: dict[_Condition, _ConditionResult],
     primary: TrustTransition,
+    profile: OpenAICompatibleTargetProfile | None,
 ) -> EvidenceBundle:
-    artifacts = {
-        BASELINE_SESSION_A_TRACE_NAME: baseline.files.session_a,
-        BASELINE_SESSION_B_TRACE_NAME: baseline.files.session_b,
-        MANIPULATED_SESSION_A_TRACE_NAME: manipulated.files.session_a,
-        MANIPULATED_SESSION_B_TRACE_NAME: manipulated.files.session_b,
+    baseline = results[_Condition.BASELINE]
+    manipulated = results[_Condition.MANIPULATED]
+    artifacts = _bundle_artifacts(series_root, results, profile)
+    configuration = {
+        "fixture_command": fixture_command,
+        "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp/",
+        "qai_version": __version__,
     }
-    if manipulated.files.memo.is_file():
-        artifacts[MANIPULATED_MEMO_NAME] = manipulated.files.memo
-    if manipulated.files.sink.is_file():
-        artifacts[MANIPULATED_SINK_NAME] = manipulated.files.sink
+    if profile is not None:
+        configuration.update(_profile_pin_configuration(profile))
     pins = ExperimentPins(
-        agent=_AGENT_PIN,
-        model=options.model.strip(),
-        configuration={
-            "fixture_command": fixture_command,
-            "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp/",
-            "qai_version": __version__,
-        },
+        agent=_agent_pin(profile),
+        model=_model(options),
+        configuration=configuration,
     )
     experiment = CascadeExperimentContext(
         baseline=baseline.observation,
@@ -586,6 +673,61 @@ def _write_primary_bundle(
         experiment=experiment,
         artifacts=artifacts,
     )
+
+
+def _bundle_artifacts(
+    series_root: Path,
+    results: dict[_Condition, _ConditionResult],
+    profile: OpenAICompatibleTargetProfile | None,
+) -> dict[str, Path]:
+    artifacts: dict[str, Path] = {
+        _HARDENED_TRANSITION_NAME: series_root / _HARDENED_TRANSITION_NAME,
+    }
+    if profile is not None:
+        artifacts[_TARGET_PROFILE_NAME] = series_root / _TARGET_PROFILE_NAME
+    for condition, result in results.items():
+        prefix = condition.value
+        files = result.files
+        artifacts[f"{prefix}/session-A.json"] = files.session_a
+        artifacts[f"{prefix}/session-B.json"] = files.session_b
+        artifacts[f"{prefix}/observation.json"] = files.observation
+        optional = {
+            f"{prefix}/session-A.inference.json": files.session_a_inference,
+            f"{prefix}/session-B.inference.json": files.session_b_inference,
+            f"{prefix}/mutation.json": files.mutation,
+            f"{prefix}/memo.json": files.memo,
+            f"{prefix}/sink.json": files.sink,
+        }
+        artifacts.update({name: path for name, path in optional.items() if path.is_file()})
+    return artifacts
+
+
+def _profile_pin_configuration(
+    profile: OpenAICompatibleTargetProfile,
+) -> dict[str, str]:
+    return {
+        "target_id": profile.target_id,
+        "target_name": profile.name,
+        "inference_driver": "openai-compatible",
+        "inference_endpoint": profile.endpoint,
+        "generation_parameters": json.dumps(
+            {
+                "max_tokens": profile.max_tokens,
+                **profile.generation_parameters(),
+            },
+            sort_keys=True,
+        ),
+    }
+
+
+def _agent_pin(profile: OpenAICompatibleTargetProfile | None) -> str:
+    return _DRIVEN_AGENT_PIN if profile is not None else _AGENT_PIN
+
+
+def _transition_payload(transition: TrustTransition) -> dict[str, Any]:
+    payload = asdict(transition)
+    payload["promotion_result"] = transition.promotion_result.value
+    return payload
 
 
 class _CascadeInboxMutation:
@@ -742,9 +884,12 @@ def _condition_files(
         root,
         root / "session-A.json",
         root / "session-B.json",
+        root / "session-A.inference.json",
+        root / "session-B.inference.json",
         root / "memo.json",
         root / "sink.json",
         root / "mutation.json",
+        root / "observation.json",
     )
 
 
@@ -791,8 +936,12 @@ def _cascade_environment(run_id: str, reset: bool) -> Iterator[None]:
 
 
 def _validate_options(options: CascadeExperimentOptions) -> Path:
-    if not options.model.strip():
-        raise ExperimentError("--model must not be empty")
+    model = options.model.strip() if isinstance(options.model, str) else ""
+    target = options.target.strip() if isinstance(options.target, str) else ""
+    if not target and not model:
+        raise ExperimentError("--model must not be empty unless --target is provided")
+    if target and model:
+        raise ExperimentError("--model and --target are mutually exclusive")
     if not 1 <= options.listen_port <= 65535:
         raise ExperimentError("--listen-port must be between 1 and 65535")
     root = options.output_root.expanduser().resolve()
@@ -802,6 +951,32 @@ def _validate_options(options: CascadeExperimentOptions) -> Path:
         raise ExperimentError("--output-root must be outside a Git checkout")
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _load_target_profile(
+    options: CascadeExperimentOptions,
+) -> OpenAICompatibleTargetProfile | None:
+    if not options.target or not options.target.strip():
+        return None
+    try:
+        return load_openai_target_profile(options.target, db_path=options.db_path)
+    except DrivenInferenceError as exc:
+        raise ExperimentError(str(exc)) from exc
+
+
+def _resolved_options(
+    options: CascadeExperimentOptions,
+    profile: OpenAICompatibleTargetProfile | None,
+) -> CascadeExperimentOptions:
+    if profile is None:
+        return options
+    return replace(options, model=profile.model)
+
+
+def _model(options: CascadeExperimentOptions) -> str:
+    if not isinstance(options.model, str) or not options.model.strip():
+        raise ExperimentError("experiment model is unresolved")
+    return options.model.strip()
 
 
 def _inside_git_checkout(path: Path) -> bool:
@@ -832,14 +1007,15 @@ def _write_series_manifest(  # noqa: PLR0913
     *,
     error: str | None = None,
     completed: CascadeExperimentResult | None = None,
+    profile: OpenAICompatibleTargetProfile | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "schema_version": 1,
         "scenario": "cascade-memo",
         "series_id": series_id,
         "status": status,
-        "agent": _AGENT_PIN,
-        "model": options.model.strip(),
+        "agent": _agent_pin(profile),
+        "model": _model(options),
         "listen_url": f"http://127.0.0.1:{options.listen_port}/mcp/",
         "prompts": {"session_a": SESSION_A_PROMPT, "session_b": SESSION_B_PROMPT},
         "conditions": {
@@ -849,10 +1025,13 @@ def _write_series_manifest(  # noqa: PLR0913
     }
     if error is not None:
         payload["error"] = error
+    if profile is not None:
+        payload["target_profile"] = profile.evidence_payload()
     if completed is not None:
         payload["primary_result"] = completed.primary.promotion_result.value
         payload["hardened_result"] = completed.hardened.promotion_result.value
         payload["bundle"] = _relative_path(completed.bundle.root, path.parent)
+        payload["hardened_transition"] = _HARDENED_TRANSITION_NAME
     _write_json(path, payload)
 
 
@@ -862,11 +1041,22 @@ def _condition_manifest(result: _ConditionResult, series_root: Path) -> dict[str
         "run_id": files.run_id,
         "session_a": _relative_path(files.session_a, series_root),
         "session_b": _relative_path(files.session_b, series_root),
+        "session_a_inference": (
+            _relative_path(files.session_a_inference, series_root)
+            if files.session_a_inference.is_file()
+            else None
+        ),
+        "session_b_inference": (
+            _relative_path(files.session_b_inference, series_root)
+            if files.session_b_inference.is_file()
+            else None
+        ),
         "memo": _relative_path(files.memo, series_root) if files.memo.is_file() else None,
         "sink": _relative_path(files.sink, series_root) if files.sink.is_file() else None,
         "mutation": (
             _relative_path(files.mutation, series_root) if files.mutation.is_file() else None
         ),
+        "observation_path": _relative_path(files.observation, series_root),
         "observation": _observation_payload(result.observation),
     }
 

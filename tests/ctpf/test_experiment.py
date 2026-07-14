@@ -26,6 +26,7 @@ from q_ai.ctpf import (
     ExternalEffect,
     PromotionResult,
 )
+from q_ai.driven_inference import OpenAICompatibleTargetProfile
 from q_ai.mcp.models import Direction, Transport
 from q_ai.proxy.models import ProxyMessage
 
@@ -212,10 +213,12 @@ class _FakeOperator:
         prompt: str,
         model: str,
         endpoint: str,
+        inference_path: Path | None,
     ) -> None:
         assert os.environ["QAI_CASCADE_RUN_ID"] == "test-run"
         assert prompt and model == "Composer 2.5"
         assert endpoint == "http://127.0.0.1:8765/mcp/"
+        assert inference_path is None
         self.calls.append((condition.value, session_name))
 
 
@@ -316,6 +319,7 @@ class TestConsoleSessionIsolation:
             reset=True,
             mutation=None,
             mutation_path=None,
+            inference_path=None,
         )
 
     def test_worker_command_uses_python_module_entrypoint(self, tmp_path: Path) -> None:
@@ -355,6 +359,35 @@ class TestConsoleSessionIsolation:
         with pytest.raises(experiment.ExperimentError, match="exit code 9"):
             experiment._run_console_session_process(spec, options)
 
+    def test_driven_worker_uses_target_without_credential_material(self, tmp_path: Path) -> None:
+        spec = experiment._SessionSpec(
+            condition=experiment._Condition.BASELINE,
+            name="A",
+            prompt=experiment.SESSION_A_PROMPT,
+            trace_path=tmp_path / "session-A.json",
+            run_id="driven-run",
+            reset=True,
+            mutation=None,
+            mutation_path=None,
+            inference_path=tmp_path / "session-A.inference.json",
+        )
+        db_path = tmp_path / "qai.db"
+        options = experiment.CascadeExperimentOptions(
+            None,
+            tmp_path,
+            8877,
+            "12345678",
+            db_path,
+        )
+
+        command = experiment._session_worker_command(spec, options)
+
+        assert command[command.index("--target") + 1] == "12345678"
+        assert command[command.index("--inference-path") + 1] == str(spec.inference_path)
+        assert command[command.index("--db-path") + 1] == str(db_path)
+        assert "--model" not in command
+        assert "credential" not in " ".join(command).lower()
+
     async def test_console_capture_uses_isolated_worker(
         self,
         tmp_path: Path,
@@ -391,6 +424,7 @@ def _condition_result(
     files.root.mkdir(parents=True)
     files.session_a.write_text('{"session":"A"}\n', encoding="utf-8")
     files.session_b.write_text('{"session":"B"}\n', encoding="utf-8")
+    files.observation.write_text('{"observation":"complete"}\n', encoding="utf-8")
     empty_read = '{"effect":"none"}'
     if condition == experiment._Condition.BASELINE:
         observation = CascadeArmObservation(
@@ -471,6 +505,52 @@ class TestSeriesCompletion:
         assert (artifacts / "manipulated" / "session-B.json").is_file()
         assert not (artifacts / "baseline" / "session.json").exists()
 
+    def test_driven_bundle_hashes_all_inference_arms_and_profile(self, tmp_path: Path) -> None:
+        series_root = tmp_path / "series"
+        series_root.mkdir()
+        results = {
+            condition: _condition_result(series_root, condition)
+            for condition in experiment._Condition
+        }
+        for result in results.values():
+            result.files.session_a_inference.write_text('{"status":"complete"}\n', encoding="utf-8")
+            result.files.session_b_inference.write_text('{"status":"complete"}\n', encoding="utf-8")
+        profile = OpenAICompatibleTargetProfile(
+            target_id="1234567890abcdef",
+            name="remote model",
+            endpoint="https://models.example.test/v1",
+            model="model-a",
+            credential_name="remote-a",
+            temperature=0.0,
+        )
+        (series_root / experiment._TARGET_PROFILE_NAME).write_text(
+            json.dumps(profile.evidence_payload()),
+            encoding="utf-8",
+        )
+        options = experiment.CascadeExperimentOptions(
+            profile.model,
+            tmp_path,
+            target=profile.target_id[:8],
+        )
+
+        completed = experiment._complete_series(
+            series_root,
+            options,
+            "python fixture.py",
+            results,
+            profile,
+        )
+
+        artifacts = completed.bundle.root / "artifacts"
+        assert (artifacts / "baseline" / "session-A.inference.json").is_file()
+        assert (artifacts / "manipulated" / "session-B.inference.json").is_file()
+        assert (artifacts / "hardened" / "session-A.inference.json").is_file()
+        assert (artifacts / "hardened" / "trust-transition.json").is_file()
+        assert (artifacts / experiment._TARGET_PROFILE_NAME).is_file()
+        manifest = json.loads(completed.bundle.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["pins"]["model"] == "model-a"
+        assert manifest["pins"]["configuration"]["inference_endpoint"] == profile.endpoint
+
 
 class TestExperimentCli:
     """Only the approved cascade command is exposed."""
@@ -487,7 +567,9 @@ class TestExperimentCli:
         )
         assert result.exit_code == 0
         assert "--model" in result.output
+        assert "--target" in result.output
         assert "--output-root" in result.output
+        assert "driver=openai-compatible" in result.output
 
     def test_hidden_session_worker_is_not_listed(self) -> None:
         """The process-isolation worker remains internal CLI plumbing."""

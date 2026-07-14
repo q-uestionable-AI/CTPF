@@ -48,6 +48,7 @@ class TestLiteLLMClient:
     async def test_complete_with_tool_calls(self) -> None:
         """Mock response with tool_calls returns correct NormalizedResponse."""
         mock_tool_call = MagicMock()
+        mock_tool_call.id = "call-weather"
         mock_tool_call.function.name = "get_weather"
         mock_tool_call.function.arguments = json.dumps({"city": "London"})
 
@@ -76,6 +77,7 @@ class TestLiteLLMClient:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "get_weather"
         assert result.tool_calls[0].arguments == {"city": "London"}
+        assert result.tool_calls[0].id == "call-weather"
         assert result.finish_reason == "tool_calls"
         assert result.content == ""
 
@@ -105,6 +107,34 @@ class TestLiteLLMClient:
         assert result.tool_calls == []
         assert result.content == "I cannot use that tool."
         assert result.finish_reason == "stop"
+
+    async def test_complete_passes_explicit_target_configuration(self) -> None:
+        """Profile endpoint, key, and fixed parameters are passed directly."""
+        mock_message = MagicMock(tool_calls=None, content="complete")
+        mock_choice = MagicMock(message=mock_message, finish_reason="stop")
+        mock_response = MagicMock(choices=[mock_choice])
+        mock_response.model_dump.return_value = {"id": "resp-1"}
+
+        with patch("q_ai.core.llm_litellm.acompletion", new_callable=AsyncMock) as mock_acomp:
+            mock_acomp.return_value = mock_response
+            client = LiteLLMClient(
+                api_base="https://models.example.test/v1",
+                api_key="secret-key",
+                generation_parameters={"temperature": 0.0, "seed": 7},
+            )
+            await client.complete(
+                model="openai/model-a",
+                messages=[{"role": "user", "content": "test"}],
+                tools=[],
+                max_tokens=321,
+            )
+
+        kwargs = mock_acomp.await_args.kwargs
+        assert kwargs["api_base"] == "https://models.example.test/v1"
+        assert kwargs["api_key"] == "secret-key"
+        assert kwargs["max_tokens"] == 321
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["seed"] == 7
 
     async def test_complete_provider_error(self) -> None:
         """acompletion exception raises ProviderError."""

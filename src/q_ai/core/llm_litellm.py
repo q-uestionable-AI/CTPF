@@ -206,6 +206,24 @@ class LiteLLMClient:
     Normalizes responses to NormalizedResponse.
     """
 
+    def __init__(
+        self,
+        *,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        generation_parameters: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure one provider client without exposing credentials globally.
+
+        Args:
+            api_base: OpenAI-compatible API base URL.
+            api_key: Credential supplied directly to LiteLLM.
+            generation_parameters: Fixed supported generation parameters.
+        """
+        self._api_base = api_base
+        self._api_key = api_key
+        self._generation_parameters = dict(generation_parameters or {})
+
     async def complete(
         self,
         model: str,
@@ -232,15 +250,22 @@ class LiteLLMClient:
 
         openai_tools = [_tool_spec_to_openai_format(t) for t in tools] if tools else None
 
+        request: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "tools": openai_tools,
+            "max_tokens": max_tokens,
+            "timeout": _DEFAULT_PROVIDER_TIMEOUT_S,
+        }
+        if self._api_base:
+            request["api_base"] = self._api_base
+        if self._api_key:
+            request["api_key"] = self._api_key
+        request.update(self._generation_parameters)
+
         try:
             # Security: Add timeout to prevent external provider calls from hanging indefinitely
-            response = await acompletion(  # type: ignore[no-untyped-call]
-                model=model,
-                messages=messages,
-                tools=openai_tools,
-                max_tokens=max_tokens,
-                timeout=_DEFAULT_PROVIDER_TIMEOUT_S,
-            )
+            response = await acompletion(**request)  # type: ignore[no-untyped-call]
         except Exception as exc:
             error_msg = str(exc).lower()
             if any(signal in error_msg for signal in _NO_TOOL_SUPPORT_SIGNALS):
@@ -265,7 +290,14 @@ class LiteLLMClient:
                         raise ProviderError(
                             f"Malformed tool call arguments from {model}: {json_exc}"
                         ) from json_exc
-                normalized_tool_calls.append(ToolCall(name=tc.function.name, arguments=args))
+                call_id = getattr(tc, "id", "")
+                normalized_tool_calls.append(
+                    ToolCall(
+                        name=tc.function.name,
+                        arguments=args,
+                        id=call_id if isinstance(call_id, str) else "",
+                    )
+                )
 
         # Normalize content
         content = message.content or ""  # type: ignore[union-attr]

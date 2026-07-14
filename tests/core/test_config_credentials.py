@@ -11,6 +11,7 @@ from q_ai.core.config import (
     _KEYRING_SERVICE,
     delete_credential,
     get_credential,
+    get_keyring_credential,
     import_legacy_credentials,
     set_credential,
 )
@@ -52,6 +53,19 @@ class TestGetCredential:
             result = get_credential("  Anthropic ")
         assert result == "sk-key"
         mock_kr.get_password.assert_called_once_with(_KEYRING_SERVICE, "anthropic")
+
+
+class TestGetKeyringCredential:
+    """The experiment credential boundary never reads environment variables."""
+
+    def test_ignores_environment_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("REMOTE_A_API_KEY", "sk-from-env")
+        with patch("q_ai.core.config.keyring") as mock_kr:
+            mock_kr.get_password.return_value = "sk-from-keyring"
+            result = get_keyring_credential(" Remote-A ")
+
+        assert result == "sk-from-keyring"
+        mock_kr.get_password.assert_called_once_with(_KEYRING_SERVICE, "remote-a")
 
 
 class TestSetCredential:

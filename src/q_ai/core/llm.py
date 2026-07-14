@@ -41,6 +41,7 @@ class ToolCall:
 
     name: str
     arguments: dict[str, Any]
+    id: str = ""
 
 
 @dataclass
@@ -141,7 +142,8 @@ def serialize_evidence(response: NormalizedResponse) -> str:
             {
                 "content": response.content,
                 "tool_calls": [
-                    {"name": tc.name, "arguments": tc.arguments} for tc in response.tool_calls
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in response.tool_calls
                 ],
             },
             indent=2,

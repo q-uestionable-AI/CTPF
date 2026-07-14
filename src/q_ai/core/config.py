@@ -59,6 +59,23 @@ def get_credential(provider: str) -> str | None:
     if env_value is not None:
         return env_value
 
+    return get_keyring_credential(provider)
+
+
+def get_keyring_credential(provider: str) -> str | None:
+    """Read a provider credential only from the OS keyring.
+
+    Unlike :func:`get_credential`, this function never consults environment
+    variables. Experiment drivers use this strict boundary so credentials
+    cannot enter a run through process configuration.
+
+    Args:
+        provider: Provider or target-profile credential name.
+
+    Returns:
+        API key string or None if the keyring has no matching entry.
+    """
+    provider = provider.strip().lower()
     _assert_secure_keyring()
     result: str | None = keyring.get_password(_KEYRING_SERVICE, provider)
     return result
