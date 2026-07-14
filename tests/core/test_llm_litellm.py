@@ -140,6 +140,7 @@ class TestLiteLLMClient:
         assert kwargs["temperature"] == 0.0
         assert kwargs["seed"] == 7
         assert kwargs["reasoning_effort"] == "none"
+        assert kwargs["allowed_openai_params"] == ["reasoning_effort"]
 
     async def test_complete_provider_error(self) -> None:
         """acompletion exception raises ProviderError."""
