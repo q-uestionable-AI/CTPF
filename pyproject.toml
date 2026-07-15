@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ctpf"
 version = "0.14.0"
-description = "Trust-boundary testing for agentic systems"
+description = "Evidence-first research harness for capability-trust experiments in agentic systems"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11,<3.14"

@@ -3,9 +3,9 @@
 **Repository-local instructions for coding agents.** Do not create a parallel `CLAUDE.md`
 or other second agent-instruction file.
 
-CTPF Research Harness (`ctpf` on PyPI and the `ctpf` CLI)
-is a security research tool for agentic AI and a lean research harness for Capability Trust
-Propagation Failure (CTPF). Durable program guidance lives in the lab vault
+CTPF is an evidence-first research project for Capability Trust Propagation Failure (CTPF).
+The `ctpf` PyPI package and CLI are its reference research harness, not the project identity.
+Durable program guidance lives in the lab vault
 `CTPF/Project Instructions.md`; current sequence and progress live in the active plan and boards.
 Do not invent a parallel roadmap inside the repo.
 
@@ -39,7 +39,8 @@ These are product invariants, not preferences.
 
 ## Hard Boundaries
 
-- Do not create PRs. Push the branch and stop.
+- PR creation is permitted only when it is included in an explicitly approved git/publish plan.
+  Otherwise, push the approved branch and stop.
 - Do not add dependencies without explicit approval.
 - Do not install extra CLI tools (`gh`, `hub`, etc.).
 - Do not write transient plan/spec/session files into the repo.
@@ -110,12 +111,15 @@ These rules exist to prevent recurring bugs. Follow them exactly.
 
 ```text
 src/ctpf/
-├── core/           # shared DB, models, config
-├── mcp/            # MCP connectivity
-├── proxy/          # traffic capture / intercept (CTPF center)
-├── kernel/         # trust-transition and evidence kernel
-├── audit/          # capability enumeration and scanners
-└── services/       # shared service-layer helpers (db_service)
+├── experiment.py        # controlled-condition coordinator and experiment CLI
+├── driven_inference.py  # demonstrated OpenAI-compatible inference seam
+├── external_runtime.py  # demonstrated external agent-runtime seam
+├── kernel/              # trust-transition, scoring, trace, and evidence contracts
+├── proxy/               # MCP observation/intervention infrastructure
+├── mcp/                 # MCP connectivity
+├── core/                # shared DB, models, config, credentials, and LLM protocol
+├── audit/               # frozen secondary enumeration/scanner library
+└── services/            # shared service-layer helpers (db_service)
 
 tests/
 ```
@@ -143,7 +147,8 @@ Without `--group dev`, dev dependencies get stripped.
 - Before editing code, check branch with `git branch --show-current`
 - If on `main`, create/switch to a feature or fix branch first (for code changes)
 - End of session: commit, stash, or discard; never leave uncommitted changes
-- Do not create PRs; push the branch and stop when asked to publish
+- Follow the explicitly approved publish boundary: push the branch and create a PR only when
+  authorized; otherwise stop after the push
 
 ### Shell quoting for commits
 

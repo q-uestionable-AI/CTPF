@@ -17,7 +17,11 @@ from ctpf.services.db_service import resolve_partial_id
 
 logger = logging.getLogger(__name__)
 
-app = typer.Typer(name="runs", help="Manage scan runs.", no_args_is_help=True)
+app = typer.Typer(
+    name="runs",
+    help="Manage stored research and operational runs.",
+    no_args_is_help=True,
+)
 console = Console()
 
 
@@ -29,7 +33,7 @@ def list_cmd(
     limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
     db_path: Path | None = typer.Option(None, hidden=True),
 ) -> None:
-    """List scan runs."""
+    """List stored runs."""
     run_status = RunStatus(status) if status is not None else None
     with get_connection(db_path) as conn:
         runs = list_runs(conn, module=module, status=run_status, target_id=target)

@@ -18,7 +18,7 @@ from ctpf.proxy.cli import app as proxy_app
 
 _DEFAULT_COMMAND_NAME = "ctpf"
 _DISPLAY_NAME = "CTPF Research Harness"
-_SUBTITLE = "Trust-boundary testing for agentic systems"
+_SUBTITLE = "Evidence-first capability-trust experiments for agentic systems"
 
 app = typer.Typer(
     name=_DEFAULT_COMMAND_NAME,
@@ -44,9 +44,10 @@ def _quick_start(command_name: str) -> str:
     """Build quick-start examples for the invoked console entry point."""
     return f"""\
 [bold]Quick Start[/bold]
-  {command_name} proxy start ...                      Intercept MCP traffic
   {command_name} experiment run --help                List demonstrated experiments
-  {command_name} targets add "My Server" http://...   Register a target
+  {command_name} experiment run cascade-memo --help   Inspect the released experiment
+  {command_name} targets add "My Model" http://...    Register a model or runtime target
+  {command_name} proxy start ...                      Observe or intervene in MCP traffic
 """
 
 
@@ -132,16 +133,16 @@ def main(
 # ---------------------------------------------------------------------------
 
 app.add_typer(
-    proxy_app,
-    name="proxy",
-    help="MCP traffic interception and replay.",
-    rich_help_panel="Observe",
-)
-app.add_typer(
     experiment_app,
     name="experiment",
     help="Run controlled CTPF experiments.",
     rich_help_panel="Research",
+)
+app.add_typer(
+    proxy_app,
+    name="proxy",
+    help="MCP observation, intervention, and replay infrastructure.",
+    rich_help_panel="Observe",
 )
 app.add_typer(targets_app, rich_help_panel="Start")
 app.add_typer(runs_app, rich_help_panel="Manage")
