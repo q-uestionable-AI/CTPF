@@ -45,7 +45,7 @@ def _quick_start(command_name: str) -> str:
     return f"""\
 [bold]Quick Start[/bold]
   {command_name} proxy start ...                      Intercept MCP traffic
-  {command_name} experiment run cascade-memo ...      Run the demonstrated CTPF workflow
+  {command_name} experiment run --help                List demonstrated experiments
   {command_name} targets add "My Server" http://...   Register a target
 """
 

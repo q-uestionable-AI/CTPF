@@ -242,6 +242,25 @@ class TestClaudeCodeDriver:
         assert transcript["command"][-1] == "<prompt>"
         assert transcript["events"] == [event]
 
+    def test_custom_mcp_server_name_is_applied_without_scenario_logic(self) -> None:
+        config = external_runtime._mcp_config(
+            "http://127.0.0.1:8765/mcp/",
+            "ctpf-pattern2",
+        )
+        command = external_runtime._claude_command(
+            _profile(),
+            "Inspect status.",
+            config,
+            "ctpf-pattern2",
+        )
+        assert "mcp__ctpf-pattern2__*" in command
+        assert "ctpf-pattern2" in config["mcpServers"]
+
+    @pytest.mark.parametrize("server_name", ["", "bad name", "bad/name"])
+    def test_invalid_mcp_server_name_is_rejected(self, server_name: str) -> None:
+        with pytest.raises(ExternalRuntimeError, match="unsupported characters"):
+            external_runtime._validated_server_name(server_name)
+
     async def test_timeout_terminates_process_and_preserves_failure(
         self,
         tmp_path: Path,

@@ -11,6 +11,8 @@ from ctpf.kernel.slice import (
     CascadeArmObservation,
     CascadeMemoScenario,
     ExternalEffect,
+    Pattern2Scenario,
+    RunObservation,
 )
 
 _CALL_TOOL_METHOD = "tools/call"
@@ -40,6 +42,50 @@ class _ToolCall:
     jsonrpc_id: str | int
     name: str
     arguments: dict[str, Any]
+
+
+def parse_pattern2_trace(
+    condition: str,
+    trace_path: Path,
+    *,
+    sink_effect: ExternalEffect,
+    expect_modified: bool,
+    scenario: Pattern2Scenario | None = None,
+) -> RunObservation:
+    """Build one Pattern 2 observation from a completed proxy trace.
+
+    Args:
+        condition: Experimental condition label.
+        trace_path: Proxy session containing the status read and optional action.
+        sink_effect: Independently observed external-effect oracle result.
+        expect_modified: Whether the ``read_status`` response must be modified.
+        scenario: Pattern 2 tool names and authority pins.
+
+    Returns:
+        A conservative Pattern 2 observation.
+    """
+    scenario = scenario or Pattern2Scenario()
+    trace = _load_trace(trace_path, "session")
+    notes = list(trace.notes)
+    calls = _tool_calls(trace.records, "session", notes)
+    status = _select_call(calls, scenario.read_tool, "session_read_status", True, notes)
+    status_content = _read_result_content(
+        trace.records,
+        status,
+        "session_read_status",
+        notes,
+    )
+    _require_json_object(status_content, "session_read_status_response", notes)
+    _validate_expected_mutation(trace.records, status, expect_modified, notes)
+    action = _select_call(calls, scenario.action_tool, "session_apply_change", False, notes)
+    return RunObservation(
+        condition=condition,
+        tool_invocation=action.name if action else None,
+        tool_arguments=action.arguments if action else None,
+        external_effect=sink_effect,
+        evidence_complete=not notes,
+        evidence_notes=tuple(notes),
+    )
 
 
 def parse_cascade_arm_traces(
@@ -247,6 +293,45 @@ def _read_result_content(
     if error is not None:
         _add_note(notes, f"{note_prefix}_response_{error}")
     return content
+
+
+def _require_json_object(
+    raw: str | None,
+    note_prefix: str,
+    notes: list[str],
+) -> None:
+    """Require one readable JSON object without raising on external input."""
+    if raw is None or not raw.strip():
+        return
+    try:
+        parsed: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        _add_note(notes, f"{note_prefix}_invalid_json")
+        return
+    if not isinstance(parsed, dict):
+        _add_note(notes, f"{note_prefix}_invalid_shape")
+
+
+def _validate_expected_mutation(
+    records: tuple[_TraceRecord, ...],
+    read_call: _ToolCall | None,
+    expected: bool,
+    notes: list[str],
+) -> None:
+    """Require the correlated read response to match the condition treatment."""
+    if read_call is None:
+        return
+    responses = [
+        record
+        for record in records
+        if record.direction == _SERVER_TO_CLIENT and record.correlated_id == read_call.proxy_id
+    ]
+    if len(responses) != 1:
+        return
+    if expected and not responses[0].modified:
+        _add_note(notes, "session_read_status_mutation_missing")
+    if not expected and responses[0].modified:
+        _add_note(notes, "session_read_status_mutation_unexpected")
 
 
 def _extract_result_content(payload: dict[str, Any]) -> tuple[str | None, str | None]:

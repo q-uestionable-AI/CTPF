@@ -163,6 +163,8 @@ class ClaudeCodeDriver:
         prompt: str,
         mcp_endpoint: str,
         transcript_path: Path,
+        *,
+        mcp_server_name: str = _MCP_SERVER_NAME,
     ) -> ClaudeCodeResult:
         """Run Claude Code non-interactively and preserve its complete output.
 
@@ -170,12 +172,14 @@ class ClaudeCodeDriver:
             prompt: Fixed scenario prompt for this fresh conversation.
             mcp_endpoint: Loopback proxy endpoint used for every MCP call.
             transcript_path: External artifact path for runtime evidence.
+            mcp_server_name: Scenario-supplied MCP connection label.
 
         Returns:
             Completion summary for the fresh conversation.
         """
-        mcp_config = _mcp_config(mcp_endpoint)
-        command = _claude_command(self._profile, prompt, mcp_config)
+        server_name = _validated_server_name(mcp_server_name)
+        mcp_config = _mcp_config(mcp_endpoint, server_name)
+        command = _claude_command(self._profile, prompt, mcp_config, server_name)
         transcript = _new_transcript(self._profile, prompt, mcp_endpoint, command, mcp_config)
         _write_json(transcript_path, transcript)
         process: asyncio.subprocess.Process | None = None
@@ -335,17 +339,24 @@ def _parse_runtime_version(version: str) -> tuple[int, int, int]:
     return major, minor, patch
 
 
-def _mcp_config(mcp_endpoint: str) -> dict[str, Any]:
+def _mcp_config(mcp_endpoint: str, server_name: str) -> dict[str, Any]:
     endpoint = _validated_mcp_endpoint(mcp_endpoint)
     return {
         "mcpServers": {
-            _MCP_SERVER_NAME: {
+            server_name: {
                 "alwaysLoad": True,
                 "type": "http",
                 "url": endpoint,
             }
         }
     }
+
+
+def _validated_server_name(server_name: str) -> str:
+    value = server_name.strip()
+    if not value or any(not (character.isalnum() or character in "-_") for character in value):
+        raise ExternalRuntimeError("Claude Code MCP server name contains unsupported characters")
+    return value
 
 
 def _validated_mcp_endpoint(mcp_endpoint: str) -> str:
@@ -367,6 +378,7 @@ def _claude_command(
     profile: ClaudeCodeTargetProfile,
     prompt: str,
     mcp_config: dict[str, Any],
+    server_name: str,
 ) -> list[str]:
     return [
         profile.executable,
@@ -383,7 +395,7 @@ def _claude_command(
         "--tools",
         "",
         "--allowedTools",
-        f"mcp__{_MCP_SERVER_NAME}__*",
+        f"mcp__{server_name}__*",
         "--permission-mode",
         "dontAsk",
         "--setting-sources",

@@ -113,7 +113,7 @@ class TestPattern2Scenario:
         assert scenario.action_tool == "apply_change"
         assert "pending_action" in scenario.mutation_fields
         assert "note" in scenario.mutation_fields
-        assert scenario.fixture_module.endswith("pattern2_preflight.py")
+        assert scenario.fixture_module.endswith("pattern2_fixture.py")
         assert scenario.authority_argument == "action"
         assert scenario.authority_value == "approve_refund"
 

@@ -1,4 +1,4 @@
-"""Tests for Pattern 2 preflight fixture sink path hygiene."""
+"""Tests for the packaged Pattern 2 fixture."""
 
 from __future__ import annotations
 
@@ -10,19 +10,19 @@ from typing import Any
 
 import pytest
 
-_FIXTURE_PATH = Path(__file__).resolve().parent / "pattern2_preflight.py"
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2] / "src" / "ctpf" / "kernel" / "pattern2_fixture.py"
+)
 _EXPECTED_MCP_TOOLS = frozenset({"read_status", "apply_change", "read_sink"})
 
 
 def _load_fixture(monkeypatch: pytest.MonkeyPatch, **env: str) -> Any:
-    """Load the fixture module with a clean env overlay."""
     monkeypatch.delenv("CTPF_PATTERN2_RUN_ID", raising=False)
     monkeypatch.delenv("CTPF_PATTERN2_RESET_SINK", raising=False)
     monkeypatch.delenv("CTPF_PATTERN2_REQUIRE_RUN_ID", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-
-    spec = importlib.util.spec_from_file_location("pattern2_preflight_under_test", _FIXTURE_PATH)
+    spec = importlib.util.spec_from_file_location("pattern2_fixture_under_test", _FIXTURE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -32,7 +32,6 @@ def _load_fixture(monkeypatch: pytest.MonkeyPatch, **env: str) -> Any:
 def test_require_run_id_aborts_when_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Default REQUIRE_RUN_ID rejects an empty RUN_ID."""
     monkeypatch.setenv("TEMP", str(tmp_path))
     with pytest.raises(SystemExit) as excinfo:
         _load_fixture(monkeypatch)
@@ -40,21 +39,18 @@ def test_require_run_id_aborts_when_missing(
 
 
 def test_active_sink_path_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Unscoped sink.json is allowed only when REQUIRE_RUN_ID is disabled."""
     monkeypatch.setenv("TEMP", str(tmp_path))
     mod = _load_fixture(monkeypatch, CTPF_PATTERN2_REQUIRE_RUN_ID="0")
-    assert mod.active_sink_path() == tmp_path / "ctpf-phase2-preflight" / "sink.json"
+    assert mod.active_sink_path() == tmp_path / "ctpf-pattern2" / "sink.json"
 
 
 def test_active_sink_path_run_scoped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """CTPF_PATTERN2_RUN_ID scopes the sink filename."""
     monkeypatch.setenv("TEMP", str(tmp_path))
     mod = _load_fixture(monkeypatch, CTPF_PATTERN2_RUN_ID="baseline-1")
-    assert mod.active_sink_path() == tmp_path / "ctpf-phase2-preflight" / "sink-baseline-1.json"
+    assert mod.active_sink_path() == tmp_path / "ctpf-pattern2" / "sink-baseline-1.json"
 
 
 def test_reset_sink_removes_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """reset_active_sink deletes an existing sink file."""
     monkeypatch.setenv("TEMP", str(tmp_path))
     mod = _load_fixture(monkeypatch, CTPF_PATTERN2_RUN_ID="r1")
     path = mod.active_sink_path()
@@ -66,9 +62,8 @@ def test_reset_sink_removes_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 def test_reset_on_start_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """CTPF_PATTERN2_RESET_SINK=1 clears the active sink at import."""
     monkeypatch.setenv("TEMP", str(tmp_path))
-    sink_dir = tmp_path / "ctpf-phase2-preflight"
+    sink_dir = tmp_path / "ctpf-pattern2"
     sink_dir.mkdir(parents=True, exist_ok=True)
     stale = sink_dir / "sink-clean.json"
     stale.write_text('{"effect": "applied"}', encoding="utf-8")
@@ -84,11 +79,9 @@ def test_reset_on_start_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 def test_apply_change_writes_run_scoped_sink(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """apply_change records effect under the run-scoped sink path."""
     monkeypatch.setenv("TEMP", str(tmp_path))
     mod = _load_fixture(monkeypatch, CTPF_PATTERN2_RUN_ID="manip-1")
-    raw = mod.apply_change("approve_refund", "test")
-    payload = json.loads(raw)
+    payload = json.loads(mod.apply_change("approve_refund", "test"))
     assert payload["effect"] == "applied"
     assert payload["run_id"] == "manip-1"
     sink_path = Path(payload["sink_path"])
@@ -98,8 +91,7 @@ def test_apply_change_writes_run_scoped_sink(
     assert on_disk["action"] == "approve_refund"
 
 
-def test_reset_sink_not_mcp_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Oracle reset stays operator/env-only — not an agent-visible MCP tool."""
+def test_reset_sink_is_not_an_mcp_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("TEMP", str(tmp_path))
     mod = _load_fixture(monkeypatch, CTPF_PATTERN2_RUN_ID="tools-check")
     tool_names = {tool.name for tool in asyncio.run(mod.mcp.list_tools())}

@@ -277,18 +277,19 @@ class TestSessionLifecycle:
         trace = tmp_path / "session-A.json"
         options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path)
 
-        await experiment._run_session(
+        spec = experiment._build_session_spec(
+            "cascade-memo",
             experiment._Condition.BASELINE,
             "A",
             experiment.SESSION_A_PROMPT,
             trace,
             "test-run",
             True,
-            options,
-            "python fixture.py",
-            operator,
+            None,
+            None,
             None,
         )
+        await experiment._run_session(spec, options, operator)
 
         payload = json.loads(trace.read_text(encoding="utf-8"))
         assert payload["ended_at"] is not None
@@ -310,18 +311,19 @@ class TestSessionLifecycle:
         monkeypatch.setattr(experiment.asyncio, "sleep", record_delay)
         options = experiment.CascadeExperimentOptions("Composer 2.5", tmp_path)
 
-        await experiment._run_session(
+        spec = experiment._build_session_spec(
+            "cascade-memo",
             experiment._Condition.BASELINE,
             "A",
             experiment.SESSION_A_PROMPT,
             tmp_path / "session-A.json",
             "test-run",
             True,
-            options,
-            "python fixture.py",
-            _FakeOperator(),
+            None,
+            None,
             None,
         )
+        await experiment._run_session(spec, options, _FakeOperator())
 
         assert delays == [experiment._LISTENER_RESTART_COOLDOWN]
 
@@ -331,16 +333,17 @@ class TestConsoleSessionIsolation:
 
     @staticmethod
     def _spec(tmp_path: Path) -> experiment._SessionSpec:
-        return experiment._SessionSpec(
-            condition=experiment._Condition.BASELINE,
-            name="A",
-            prompt=experiment.SESSION_A_PROMPT,
-            trace_path=tmp_path / "session-A.json",
-            run_id="isolated-run",
-            reset=True,
-            mutation=None,
-            mutation_path=None,
-            inference_path=None,
+        return experiment._build_session_spec(
+            "cascade-memo",
+            experiment._Condition.BASELINE,
+            "A",
+            experiment.SESSION_A_PROMPT,
+            tmp_path / "session-A.json",
+            "isolated-run",
+            True,
+            None,
+            None,
+            None,
         )
 
     def test_worker_command_uses_python_module_entrypoint(self, tmp_path: Path) -> None:
@@ -381,16 +384,17 @@ class TestConsoleSessionIsolation:
             experiment._run_console_session_process(spec, options)
 
     def test_driven_worker_uses_target_without_credential_material(self, tmp_path: Path) -> None:
-        spec = experiment._SessionSpec(
-            condition=experiment._Condition.BASELINE,
-            name="A",
-            prompt=experiment.SESSION_A_PROMPT,
-            trace_path=tmp_path / "session-A.json",
-            run_id="driven-run",
-            reset=True,
-            mutation=None,
-            mutation_path=None,
-            inference_path=tmp_path / "session-A.inference.json",
+        spec = experiment._build_session_spec(
+            "cascade-memo",
+            experiment._Condition.BASELINE,
+            "A",
+            experiment.SESSION_A_PROMPT,
+            tmp_path / "session-A.json",
+            "driven-run",
+            True,
+            None,
+            None,
+            tmp_path / "session-A.inference.json",
         )
         db_path = tmp_path / "ctpf.db"
         options = experiment.CascadeExperimentOptions(
@@ -430,7 +434,6 @@ class TestConsoleSessionIsolation:
         await experiment._capture_session(
             spec,
             options,
-            "python fixture.py",
             experiment._ConsoleOperator(),
         )
 

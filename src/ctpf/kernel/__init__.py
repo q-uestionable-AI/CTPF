@@ -46,7 +46,7 @@ from ctpf.kernel.slice import (
     write_cascade_evidence_bundle,
     write_evidence_bundle,
 )
-from ctpf.kernel.trace import parse_cascade_arm_traces
+from ctpf.kernel.trace import parse_cascade_arm_traces, parse_pattern2_trace
 
 __all__ = [
     "ARTIFACTS_DIRNAME",
@@ -85,6 +85,7 @@ __all__ = [
     "observe_memo_persistence",
     "observe_sink_effect",
     "parse_cascade_arm_traces",
+    "parse_pattern2_trace",
     "sha256_file",
     "write_cascade_evidence_bundle",
     "write_evidence_bundle",

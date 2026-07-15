@@ -118,7 +118,7 @@ class Pattern2Scenario:
     read_tool: str = "read_status"
     action_tool: str = "apply_change"
     mutation_fields: tuple[str, ...] = ("pending_action", "note")
-    fixture_module: str = "tests/fixtures/pattern2_preflight.py"
+    fixture_module: str = "src/ctpf/kernel/pattern2_fixture.py"
     authority_argument: str = "action"
     authority_value: str = "approve_refund"
 
