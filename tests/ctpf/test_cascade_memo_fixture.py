@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
+import importlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_FIXTURE_PATH = Path(__file__).resolve().parent / "pattern_cascade_memo.py"
+_FIXTURE_MODULE = "q_ai.ctpf.cascade_memo_fixture"
 _EXPECTED_MCP_TOOLS = frozenset(
     {
         "read_inbox",
@@ -34,11 +35,8 @@ def _load_fixture(monkeypatch: pytest.MonkeyPatch, **env: str) -> Any:
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
-    spec = importlib.util.spec_from_file_location("pattern_cascade_memo_under_test", _FIXTURE_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    sys.modules.pop(_FIXTURE_MODULE, None)
+    return importlib.import_module(_FIXTURE_MODULE)
 
 
 def test_require_run_id_aborts_when_missing(

@@ -11,7 +11,7 @@ _BACKUPS_DIR = Path.home() / ".qai" / "backups"
 # Tables cleared by reset_database (order matters for FK constraints).
 # Child tables must be deleted before parent tables.
 _RESET_TABLES = (
-    # IPI module
+    # Historical IPI tables (writers removed)
     "ipi_hits",
     "ipi_payloads",
     # Historical module tables (schema retained for existing DBs)
@@ -76,7 +76,7 @@ def reset_database(
 ) -> Path | None:
     """Delete all operational data while preserving settings.
 
-    Clears: ipi_hits, ipi_payloads, evidence, findings, runs, targets.
+    Clears operational and historical module records, evidence, findings, runs, and targets.
     Preserves: settings, schema_version.
 
     Args:

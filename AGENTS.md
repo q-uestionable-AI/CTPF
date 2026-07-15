@@ -21,8 +21,8 @@ instructed.
 
 These are product invariants, not preferences.
 
-- **Local HTTP binding:** Any local HTTP server (headless IPI callbacks, proxy adapters,
-  etc.) binds to `127.0.0.1` only. Never bind to `0.0.0.0` or external interfaces.
+- **Local HTTP binding:** Any CTPF-owned local HTTP server or proxy adapter binds to
+  `127.0.0.1` only. Never bind to `0.0.0.0` or external interfaces.
 - **API key storage:** API keys go in the OS keyring only. Never store keys in config files,
   environment variables, or source code.
 
@@ -52,9 +52,10 @@ These are product invariants, not preferences.
 - Only write files to standard repo locations (`src/`, `tests/`, `docs/`) or paths named
   in the task brief.
 - Do not restore removed legacy product packages (`server`, `assist`, `rxp`, `chain`,
-  `orchestrator`, `imports`) without explicit instruction.
-- Keep `inject` fixtures-only (`build_server` + payloads); do not restore campaign
-  orchestration without explicit instruction.
+  `orchestrator`, `imports`, `ipi`, `cxp`, `inject`) without explicit instruction.
+- Keep demonstrated fixtures narrow and colocated with their CTPF scenario or test. Do not
+  recreate the removed fixture-library packages or a generic fixture hierarchy without
+  demonstrated need and explicit instruction.
 
 ## Do Not Modify Unless Explicitly Instructed
 
@@ -115,9 +116,6 @@ src/q_ai/
 ├── proxy/          # traffic capture / intercept (CTPF center)
 ├── ctpf/           # trust-transition and evidence kernel
 ├── audit/          # capability enumeration and scanners
-├── inject/         # malicious MCP fixtures (fixtures-only)
-├── ipi/            # document generators + headless callback (library)
-├── cxp/            # coding-assistant context generators (library)
 └── services/       # shared service-layer helpers (db_service)
 
 tests/

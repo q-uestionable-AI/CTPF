@@ -1,88 +1,21 @@
 ---
 title: Environment Variables
-description: Environment variables recognized by qai
+description: Non-secret environment behavior in CTPF Research Harness
 ---
 
-qai recognizes a small number of environment variables. Most configuration is handled through the CLI, Settings UI, or config file — environment variables are primarily for credentials and CI/CD overrides.
+CTPF does not accept API keys or remote credentials from environment variables. Store credentials
+in the OS keyring with `ctpf config set-credential` and reference only the credential name from an
+inference target.
 
-## LLM Provider Credentials
+The cascade experiment uses internal, run-scoped `QAI_CASCADE_*` variables when it launches its
+packaged stdio fixture. The historical Pattern 2 calibration fixture similarly uses
+`QAI_PATTERN2_*`. These values contain run identifiers and reset controls, not credentials, and
+are managed by the harness or its tests.
 
-Provider API keys follow the convention `{PROVIDER}_API_KEY`. These are checked before the OS keyring when resolving credentials.
+The configuration resolver can consult an explicitly mapped environment variable for a
+**non-secret** setting. That generic precedence does not apply to credentials.
 
-| Variable | Provider |
-|----------|----------|
-| `ANTHROPIC_API_KEY` | Anthropic (Claude models) |
-| `OPENAI_API_KEY` | OpenAI (GPT models) |
-| `GROQ_API_KEY` | Groq |
-| `OPENROUTER_API_KEY` | OpenRouter |
-| `COHERE_API_KEY` | Cohere |
-| `MISTRAL_API_KEY` | Mistral |
-
-Any provider name mapped through `{PROVIDER_NAME.upper()}_API_KEY` is recognized. For example, a provider named `azure` would check `AZURE_API_KEY`.
-
-
-<CodeGroup>
-```bash Linux / macOS
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-```
-
-```powershell Windows PowerShell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-$env:OPENAI_API_KEY = "sk-..."
-```
-</CodeGroup>
-
-<Note>
-For persistent credential storage, use the OS keyring via `qai config set-credential` instead of environment variables. Environment variables are useful for CI/CD pipelines and ephemeral environments where a keyring is unavailable.
-</Note>
-
-## Model Selection
-
-### QAI_MODEL
-
-Default model for inject campaigns and chain execution. Used when the `--model` CLI flag is not provided.
-
-**Format:** `provider/model` (e.g., `anthropic/claude-sonnet-4-20250514`, `openai/gpt-4o`, `ollama/llama3`)
-
-```bash
-export QAI_MODEL=anthropic/claude-sonnet-4-20250514
-```
-
-Bare model names without a provider prefix are treated as Anthropic.
-
-## IPI Probe
-
-### QAI_PROBE_API_KEY
-
-Bearer token for the `qai ipi probe` command. Used when probing OpenAI-compatible endpoints that require authentication (e.g., vLLM on RunPod with `VLLM_API_KEY` set).
-
-```bash
-export QAI_PROBE_API_KEY=sk-your-endpoint-key
-```
-
-Can also be passed directly via `--api-key` on the CLI. The CLI flag takes precedence over the environment variable.
-
-## Credential Resolution Order
-
-qai resolves credentials in this order:
-
-1. **Environment variable** — `{PROVIDER}_API_KEY` (checked first)
-2. **OS keyring** — stored via `qai config set-credential` (checked second)
-3. **Error** — raises if neither is found
-
-This allows environment-based overrides for CI/CD while maintaining secure keyring storage for interactive use.
-
-## Configuration Resolution Order
-
-For non-credential settings, `qai config resolve` uses this precedence:
-
-1. **CLI flag** (highest priority)
-2. **Environment variable** (if mapped)
-3. **Database setting** (stored via Settings UI or `qai config set`)
-4. **Config file** (`~/.qai/config.yaml`)
-5. **Default value** (lowest priority)
-
-<Tip>
-Use `qai config get <key>` to see the current resolved value and its source.
-</Tip>
+<Warning>
+Do not place API keys in `*_API_KEY`, `.env`, YAML, target metadata, or source files for CTPF.
+The credential boundary is OS-keyring only.
+</Warning>

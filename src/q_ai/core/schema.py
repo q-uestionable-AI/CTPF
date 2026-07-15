@@ -323,7 +323,7 @@ def _migrate_v13(conn: sqlite3.Connection) -> None:
     """V13: Add template_id column to ipi_payloads for per-run provenance.
 
     Records which ``DocumentTemplate`` framed each generated payload so the
-    IPI inventory UI and exported run guidance can display the template
+    Historical exports can display the template
     alongside format/technique. Nullable by design — legacy rows predate
     the template system and remain NULL rather than being backfilled.
 

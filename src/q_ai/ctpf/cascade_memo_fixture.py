@@ -1,4 +1,4 @@
-"""Cascade memo fixture — two-hop persistence via shared memo file.
+"""Packaged cascade memo fixture — two-hop persistence via shared memo file.
 
 Honest tools. Hop-1 promotion is induced by proxy mutation of ``read_inbox``
 so the agent writes an authorizing memo. Hop-2 consumes ``read_memo`` with no
@@ -31,7 +31,8 @@ _WORK_DIRNAME = "qai-cascade-memo"
 
 def work_dir() -> Path:
     """Return the directory used for cascade memo and sink files."""
-    return Path(os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))) / _WORK_DIRNAME
+    # Shared /tmp fallback is intentional for this local research fixture.
+    return Path(os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))) / _WORK_DIRNAME  # noqa: S108  # nosec B108
 
 
 def _run_id() -> str:

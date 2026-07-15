@@ -1,13 +1,13 @@
 ---
 title: Architecture Overview
-description: Post–Phase 1 CTPF research harness shape
+description: Current CTPF research harness shape
 ---
 
 CTPF Research Harness is a local Python harness with one preferred public operator entry point:
 the `ctpf` CLI. The former `qai` executable remains a compatibility alias. This page matches the
 durable invariants in the repository
 [`docs/Architecture.md`](https://github.com/q-uestionable-AI/CTPF/blob/main/docs/Architecture.md)
-after the Phase 1 shape cut.
+after the Phase 6 fixture prune.
 
 ## System shape
 
@@ -17,20 +17,18 @@ after the Phase 1 shape cut.
 | --- | --- |
 | `proxy` | Capture, intercept, live modify, export MCP traffic (Textual TUI) |
 | `mcp` | MCP transports and sessions (stdio, SSE, streamable HTTP) |
-| `core` | Shared models, SQLite persistence, config, credentials, providers |
+| `core` | Shared models, SQLite persistence, config, credentials, LLM protocol |
+| `ctpf` | Trust-transition kernel, trace parsing, evidence bundles, cascade fixture |
+| experiment adapters | Cascade director, OpenAI-compatible driver, Claude Code CLI runtime |
 
-**Library modules** (not public CLI pillars; fixtures / research code):
+**Library module** (not a public CLI pillar):
 
 | Area | Responsibility |
 | --- | --- |
 | `audit` | Capability enumeration / scanners; SARIF export |
-| `ipi` | Document generators + headless callback listener |
-| `cxp` | Coding-assistant context-file generators |
-| `inject` | Malicious MCP fixture servers (`build_server` + payload templates) |
 
-**Removed in Phase 1** (do not restore without explicit instruction): Web UI
-(`server/`), `assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, and the
-inject campaign/scoring path.
+**Removed** (do not restore without explicit instruction): Web UI (`server/`),
+`assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, `ipi/`, `cxp/`, and `inject/`.
 
 ## Public CLI (transitional)
 
@@ -45,19 +43,16 @@ ctpf db             # Local database maintenance
 ctpf --version
 ```
 
-New verbs such as `inspect` / `evidence` are deferred until a CTPF experiment
-defines a real interface.
-
-Library Typer apps may remain for fixture workflows
-(`python -m q_ai.ipi`, `python -m q_ai.inject`) but are not root `ctpf` pillars.
+New verbs such as `inspect`, `evidence`, or `fixture` are deferred until a demonstrated
+CTPF experiment defines a real interface. The cascade fixture is implementation equipment
+behind `ctpf experiment`, not an independent CLI.
 
 ## Shared backbone
 
 Persistence is a local SQLite database (`~/.qai/qai.db`). The common schema
 centers on `targets`, `runs`, `findings`, `evidence`, and `settings`, with
-additional tables retained for historical module data (proxy sessions, IPI hits,
-legacy chain/inject/RXP tables may still exist for old DBs even when writers are
-gone).
+additional tables retained for historical module data. IPI, CXP, Inject, Chain, and
+RXP tables may still exist for old databases even though their writers are gone.
 
 `core/db.py` provides shared database access used by the transitional CLI
 (`get_connection`, target/run/finding helpers, and the default DB path).
@@ -70,8 +65,8 @@ orchestrator.
 ### Core
 
 `core` owns durable cross-cutting contracts: database access, schema migration,
-shared data models, configuration, credential lookup (OS keyring), and
-provider/model abstractions.
+shared data models, configuration, credential lookup (OS keyring), and the
+provider-agnostic protocol used by driven inference.
 
 ### MCP
 
@@ -91,18 +86,15 @@ agent counterfactual replay is not assumed.
 
 ## LLM boundary
 
-Provider-facing code stays behind shared core interfaces (`core.llm`,
-`core.providers`, LiteLLM-backed implementation). Modules that need models
-consume that boundary rather than embedding provider SDKs directly.
+Provider-facing code stays behind `core.llm` and the LiteLLM-backed implementation.
+The demonstrated remote target is OpenAI-compatible; the independent Claude Code adapter
+uses runtime-managed authentication rather than an embedded provider SDK.
 
 ## Security and trust invariants
 
-- Any local HTTP listener (IPI headless callback, proxy listen adapters) binds
-  to `127.0.0.1` only — never `0.0.0.0` or external interfaces for product surfaces.
+- Any CTPF-owned local HTTP listener or proxy adapter binds to `127.0.0.1` only.
 - API keys go in the OS keyring only — never config files or source code.
-- The IPI callback listener may optionally expose itself via a tunnel adapter
-  (`--tunnel cloudflare`) for testing remote/cloud AI targets, with tunnel-mode
-  hardening documented in the IPI library pages.
+- Claude Code uses runtime-managed secure login and a minimal non-secret environment.
 
 ## Configuration precedence
 
@@ -114,14 +106,11 @@ CLI flags (highest priority)
         → Built-in defaults (lowest priority)
 ```
 
-Credentials follow a separate chain: environment variable → OS keyring → error
-(prefer keyring for durable storage).
+Credentials follow a separate boundary: OS keyring → error. Environment variables and
+configuration files are not credential sources.
 
 ## Next steps
 
 - [Core Infrastructure](/architecture/core) — Database, configuration, shared models
 - [Proxy Module](/architecture/proxy-module) — Observation and intercept
 - [Audit Module](/architecture/audit-module) — Library scanners and reporting
-- [Inject Module](/architecture/inject-module) — Fixture servers
-- [IPI Module](/architecture/ipi-module) — Document generation and callbacks
-- [CXP Module](/architecture/cxp-module) — Context-file fixtures

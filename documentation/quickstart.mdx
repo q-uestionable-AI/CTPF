@@ -8,7 +8,7 @@ description: Install CTPF Research Harness and start MCP observation with the pr
 - **Python 3.11** or later
 - **[uv](https://docs.astral.sh/uv/)** (recommended) or pip
 - **Node.js / npm** (optional) — Useful if your MCP target is an npm package you spawn locally
-- **LLM provider API key** (optional) — Only needed if a library workflow or fixture uses a model.
+- **Inference endpoint credential** (optional) — Only needed for a driven-inference target.
   Store credentials in the OS keyring via `ctpf config set-credential`. See
   [Configure a provider](#configure-a-provider-optional).
 
@@ -38,21 +38,13 @@ Existing `q-uestionable-ai` installations upgrade through a same-version compati
 
 ## Configure a provider (optional)
 
-Provider credentials are optional for the core proxy / targets workflow. If a library
-fixture needs a model, store the API key in the OS keyring (never in config files):
+Credentials are optional for proxy and manual operator workflows. For a driven-inference
+target, store its credential in the OS keyring (never in config files or environment variables):
 
 <CodeGroup>
-```bash Anthropic
-ctpf config set-credential anthropic
-# Prompts for your API key (masked input)
-```
-
-```bash OpenAI
-ctpf config set-credential openai
-```
-
-```bash Other providers
-ctpf config set-credential <provider-name>
+```bash Target credential
+ctpf config set-credential lab-inference
+# Prompts for the credential (masked input)
 ```
 </CodeGroup>
 
@@ -60,8 +52,8 @@ ctpf config set-credential <provider-name>
 ctpf config list-providers
 ```
 
-When selecting a model elsewhere, use the `provider/model` format
-(e.g., `anthropic/claude-sonnet-4-20250514`).
+The credential name is referenced by an OpenAI-compatible inference target. Claude Code
+external-runtime targets use the runtime's secure login instead.
 
 ## Register a target and start the proxy
 
@@ -101,26 +93,20 @@ When selecting a model elsewhere, use the `provider/model` format
   </Step>
 </Steps>
 
-## Library tooling (not root CLI pillars)
+## Experiment and audit surfaces
 
-Audit, inject, IPI, and CXP are **libraries / research fixtures**, not public `ctpf`
-subcommands after Phase 1.
+The demonstrated cascade workflow is available through the experiment command:
 
 Examples:
 
 ```bash
-# Inject fixture server
-python -m q_ai.inject serve --transport stdio
-
-# IPI headless callback listener / generators
-python -m q_ai.ipi --help
+ctpf experiment run cascade-memo --help
 
 # Audit as a library (import or module entry — not `ctpf audit`)
 python -c "import q_ai.audit; print('audit library available')"
 ```
 
-See [Audit Overview](/audit/overview), [Inject Overview](/inject/overview),
-[IPI Overview](/ipi/overview), and [CXP Overview](/cxp/overview).
+See [Audit Overview](/audit/overview) and [Architecture Overview](/architecture/overview).
 
 ## Next steps
 

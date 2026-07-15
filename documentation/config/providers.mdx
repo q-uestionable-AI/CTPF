@@ -1,132 +1,52 @@
 ---
-title: LLM Provider Configuration
-description: Configure LLM providers and credentials for injection campaigns and chain execution
+title: Inference Target Configuration
+description: Configure the demonstrated OpenAI-compatible target and OS-keyring credential
 ---
 
-CTPF Research Harness uses LLM providers for model-backed research workflows. Core proxy and local
-state operations do not require a provider.
+The proxy and manual operator workflows do not require a model credential. The driven-inference
+workflow uses a persisted target with an OpenAI-compatible endpoint, exact model pin, fixed
+generation parameters, and the name of an OS-keyring credential.
 
-Provider support is powered by [litellm](https://docs.litellm.ai/), giving access to 100+ providers and models.
-
-## Provider/Model Format
-
-All model references use the `provider/model` format:
-
-```
-anthropic/claude-sonnet-4-20250514
-openai/gpt-4o
-groq/llama-3.3-70b-versatile
-ollama/llama3
-```
-
-Bare model names without a provider prefix are treated as Anthropic (e.g., `claude-sonnet-4-20250514` becomes `anthropic/claude-sonnet-4-20250514`).
-
-## Storing Credentials (CLI)
-
-Store API keys in the OS keyring using `ctpf config set-credential`. The command prompts for the key with masked input — the key is never passed as a command-line argument.
+## Store the credential
 
 ```bash
-ctpf config set-credential anthropic
-# Prompts: "API key for anthropic:" (masked input)
-# Credential for anthropic saved to OS keyring.
+ctpf config set-credential lab-inference
 ```
 
-Credentials are stored in your OS native secret store:
-- **Windows**: Credential Manager
-- **macOS**: Keychain
-- **Linux**: Secret Service (requires a keyring daemon)
+The command prompts with masked input and stores the value in Windows Credential Manager,
+macOS Keychain, or Linux Secret Service. API keys are never read from environment variables,
+configuration files, target metadata, or source code.
 
 <Warning>
-On headless Linux without a keyring daemon, the keyring backend falls back to insecure storage. In that environment, use environment variables instead. See [Environment Variables](/config/environment-variables).
+If no secure OS-backed keyring is available, configure one before running driven inference.
+The harness fails closed rather than falling back to plaintext or environment variables.
 </Warning>
 
-### View configured providers
-
-```bash
-ctpf config list-providers
-```
-
-Displays a table showing each known provider and whether a credential is configured, in the environment, or not set.
-
-### Delete credentials
-
-```bash
-ctpf config delete-credential anthropic
-```
-
-### Migrate legacy plaintext credentials
-
-If you have API keys in `~/.qai/config.yaml` from an older version:
+Legacy plaintext credentials can be migrated once with:
 
 ```bash
 ctpf config import-legacy-credentials
 ```
 
-This moves keys from the YAML file to the OS keyring and removes them from the config file. The original file is backed up as `config.yaml.bak`.
-
-## Storing Credentials (Environment Variables)
-
-Set provider API keys as environment variables. These take priority over the keyring.
-
-<CodeGroup>
-```bash Linux / macOS
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export GROQ_API_KEY="gsk_..."
-```
-
-```powershell Windows PowerShell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-$env:OPENAI_API_KEY = "sk-..."
-$env:GROQ_API_KEY = "gsk_..."
-```
-</CodeGroup>
-
-The naming convention is `{PROVIDER_NAME}_API_KEY` (uppercase). See [Environment Variables](/config/environment-variables) for the full list.
-
-## Credential Resolution
-
-When a command needs a provider credential, the harness checks in this order:
-
-1. **Environment variable** (e.g., `ANTHROPIC_API_KEY`)
-2. **OS keyring** (stored via `ctpf config set-credential`)
-3. **Error** if neither is found
-
-## Settings UI
-
-The web UI Settings page (gear icon in the nav bar) provides a graphical interface for managing providers:
-
-- **Providers section**: Add, edit, test, and delete provider credentials. Each provider shows its type (cloud or local) and credential status.
-- **Defaults section**: Set default provider, model, transport, and callback URL. These pre-populate launcher forms.
-
-To open Settings, run `qai` and click the gear icon, or navigate to `/settings` in the browser.
-
-## Local Providers
-
-Local providers (Ollama, LM Studio) run on your machine and don't require API keys. Configure them through the Settings UI or by setting the model string directly:
+## Register an OpenAI-compatible target
 
 ```bash
-# Ollama (must be running: ollama serve)
-qai inject campaign --model ollama/llama3 --rounds 1
-
-# LM Studio (must have local server running)
-qai inject campaign --model lmstudio/your-model-name --rounds 1
+ctpf targets add "Lab Inference" http://inference-server:11434/v1 \
+  --type inference \
+  --meta driver=openai-compatible \
+  --meta model=qwen3.5:4b \
+  --meta credential=lab-inference \
+  --meta max_tokens=512 \
+  --meta temperature=0 \
+  --meta seed=0 \
+  --meta reasoning_effort=none
 ```
 
-## Using Providers in Commands
+The endpoint and model are exact experiment pins. The `credential` value is only a keyring entry
+name; secret material is not stored in SQLite or evidence bundles.
 
-```bash
-# Inject campaign — requires a provider
-qai inject campaign \
-  --model anthropic/claude-sonnet-4-20250514 \
-  --rounds 2
+## Claude Code runtime targets
 
-# Chain execution — requires a provider
-qai chain run \
-  --chain-file my_chain.yaml \
-  --inject-model openai/gpt-4o \
-  --targets ~/.qai/chain-targets.yaml
-
-# Audit — does NOT require a provider
-qai audit scan --transport stdio --command "npx @modelcontextprotocol/server-memory"
-```
+The demonstrated external-runtime adapter does not use a provider SDK or API-key setting. It uses
+Claude Code's runtime-managed secure login, an exact model ID, a minimum supported runtime version,
+and a minimal non-secret process environment.

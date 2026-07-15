@@ -41,11 +41,11 @@ def load_config(config_path: Path | None = None) -> dict:
 
 
 def get_credential(provider: str) -> str | None:
-    """Get an API key for a provider.
+    """Get an API key from the OS keyring.
 
-    Resolution order: env var -> keyring -> None.
-    No runtime fallback to config.yaml. Legacy credentials
-    must be migrated via ``qai config import-legacy-credentials``.
+    There is no environment-variable or config-file credential fallback.
+    Legacy credentials must be migrated via
+    ``qai config import-legacy-credentials``.
 
     Args:
         provider: Provider name (e.g. "anthropic", "openai").
@@ -53,21 +53,14 @@ def get_credential(provider: str) -> str | None:
     Returns:
         API key string or None if not found.
     """
-    provider = provider.strip().lower()
-    env_var = _provider_env_var(provider)
-    env_value = os.environ.get(env_var)
-    if env_value is not None:
-        return env_value
-
     return get_keyring_credential(provider)
 
 
 def get_keyring_credential(provider: str) -> str | None:
     """Read a provider credential only from the OS keyring.
 
-    Unlike :func:`get_credential`, this function never consults environment
-    variables. Experiment drivers use this strict boundary so credentials
-    cannot enter a run through process configuration.
+    Experiment drivers use this explicit boundary so credentials cannot enter
+    a run through process configuration.
 
     Args:
         provider: Provider or target-profile credential name.
@@ -109,8 +102,8 @@ def _assert_secure_keyring() -> None:
     """Raise if the active keyring backend is known to be insecure.
 
     On headless Linux without a keyring daemon, keyring may silently
-    fall back to PlaintextKeyring or FailKeyring. Operators in that
-    environment must use environment variables instead.
+    fall back to PlaintextKeyring or FailKeyring. Operators must configure
+    an OS-backed keyring before using credentials in that environment.
 
     Raises:
         RuntimeError: If the active backend is insecure.
@@ -120,26 +113,9 @@ def _assert_secure_keyring() -> None:
     if type(backend).__name__ in insecure:
         raise RuntimeError(
             f"Insecure keyring backend detected: {type(backend).__name__}. "
-            "No keyring daemon is available. "
-            "Set credentials via environment variables instead "
-            "(e.g. ANTHROPIC_API_KEY)."
+            "No secure keyring daemon is available. Configure an OS-backed "
+            "keyring before storing or reading credentials."
         )
-
-
-def _provider_env_var(provider: str) -> str:
-    """Map provider name to conventional env var.
-
-    'anthropic' -> 'ANTHROPIC_API_KEY'
-    'openai' -> 'OPENAI_API_KEY'
-    etc.
-
-    Args:
-        provider: Provider name.
-
-    Returns:
-        Environment variable name.
-    """
-    return f"{provider.upper()}_API_KEY"
 
 
 def get_lab_setting(

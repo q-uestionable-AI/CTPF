@@ -145,7 +145,7 @@ class CascadeMemoScenario:
     persist_tool: str = "write_memo"
     memo_tool: str = "read_memo"
     action_tool: str = "apply_change"
-    fixture_module: str = "tests/fixtures/pattern_cascade_memo.py"
+    fixture_module: str = "src/q_ai/ctpf/cascade_memo_fixture.py"
     authority_argument: str = "action"
     authority_value: str = "approve_refund"
 

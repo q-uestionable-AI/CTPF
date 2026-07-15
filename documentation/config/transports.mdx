@@ -1,83 +1,42 @@
 ---
 title: MCP Transport Types
-description: Configure how CTPF Research Harness connects to MCP servers
+description: Configure how CTPF connects to MCP servers
 ---
 
-CTPF Research Harness supports three MCP transport types for connecting to target servers. The
-transport determines how messages are exchanged between the harness and the server under test.
+CTPF's MCP and proxy layers support stdio, legacy SSE, and Streamable HTTP.
 
-## Transport Types
-
-| Transport | Flag Value | Connection | Use Case |
-|-----------|-----------|------------|----------|
-| **stdio** | `stdio` | Spawns server as child process, communicates via stdin/stdout | Local servers, npm packages, Python servers |
-| **SSE** | `sse` | HTTP connection with Server-Sent Events | Remote servers using the legacy SSE transport |
-| **Streamable HTTP** | `streamable-http` | Bidirectional HTTP streaming | Remote servers using the current MCP spec |
+| Transport | Flag value | Connection | Typical use |
+|-----------|------------|------------|-------------|
+| **stdio** | `stdio` | Spawn a controlled child server over stdin/stdout | Local MCP servers and packaged experiment fixtures |
+| **SSE** | `sse` | Legacy HTTP Server-Sent Events | Servers that still expose the older MCP transport |
+| **Streamable HTTP** | `streamable-http` | Current bidirectional HTTP transport | Modern MCP servers and the loopback experiment seam |
 
 ## stdio
 
-The most common transport. qai spawns the server as a child process and communicates over standard input/output. It is the default for web UI workflow launches, but CLI commands require an explicit `--transport stdio` flag.
-
-**CLI usage:**
-
 ```bash
-# Audit a local MCP server
-qai audit scan --transport stdio --command "npx @modelcontextprotocol/server-memory"
-
-# Proxy a local server
 ctpf proxy start --transport stdio --target-command "python my_server.py"
-
-# Inject with a local target
-qai inject serve --transport stdio
 ```
 
-The `--command` flag specifies the shell command to start the server. The harness handles process
-lifecycle (spawn, communicate, terminate).
-
-**When to use:** Local development, testing npm or Python MCP servers, CI pipelines where the server runs on the same machine.
+The proxy owns the child-process lifecycle and relays MCP messages between the controlled client
+and server. The cascade experiment uses this transport upstream to its honest packaged fixture.
 
 ## SSE
 
-Server-Sent Events over HTTP. Connect to a remote MCP server that implements the legacy SSE transport.
-
-**CLI usage:**
-
 ```bash
-qai audit scan --transport sse --url "https://mcp-server.example.com/sse"
-
 ctpf proxy start --transport sse --target-url "https://mcp-server.example.com/sse"
 ```
 
-The `--url` flag specifies the server's SSE endpoint.
-
-**When to use:** Remote servers using the older MCP SSE protocol, servers behind firewalls that allow HTTP.
+Use SSE only for a server that implements the legacy transport.
 
 ## Streamable HTTP
 
-Bidirectional HTTP streaming. Connect to a remote MCP server implementing the current Streamable HTTP transport specification.
-
-**CLI usage:**
-
 ```bash
-qai audit scan --transport streamable-http --url "https://mcp-server.example.com/mcp"
-
 ctpf proxy start --transport streamable-http --target-url "https://mcp-server.example.com/mcp"
 ```
 
-**When to use:** Modern MCP servers, cloud deployments, servers requiring bidirectional communication.
+The cascade experiment exposes its client-facing proxy endpoint over Streamable HTTP on
+`127.0.0.1`. Both the driven-inference and Claude Code targets connect through that observable,
+mutable loopback seam.
 
-## Default Transport
-
-The default transport is `stdio`. You can set a different default in the web UI under **Settings > Defaults > Audit Transport**, which applies to workflow launches from the web UI.
-
-CLI commands always require an explicit `--transport` flag — there is no global CLI default.
-
-## Module-Specific Notes
-
-**Audit:** Uses `--transport`, `--command` (stdio), and `--url` (SSE/HTTP) flags on `qai audit scan` and `qai audit enumerate`.
-
-**Proxy:** Uses `--transport`, `--target-command` (stdio), and `--target-url` (SSE/HTTP) flags on `ctpf proxy start` and `ctpf proxy replay`.
-
-**Inject:** The inject server (`qai inject serve`) uses `--transport` to control how the malicious MCP server is exposed. Campaigns use the litellm backend (not MCP transport) to communicate with LLM providers.
-
-**Chain:** Transport for chain execution is configured in `chain-targets.yaml` (per-target transport and connection details).
+CTPF-owned local HTTP listeners always bind to `127.0.0.1`; they never bind to an external
+interface.

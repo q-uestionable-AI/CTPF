@@ -1,7 +1,7 @@
 """Provider-agnostic LLM interaction protocol and data models.
 
-Defines the ProviderClient protocol and normalized data structures that
-campaign.py imports. No provider-specific imports belong here.
+Defines the ProviderClient protocol and normalized data structures used by
+driven inference. No provider-specific imports belong here.
 """
 
 from __future__ import annotations
@@ -26,8 +26,7 @@ class UnsupportedCapabilityError(ProviderError):
 class ToolSpec:
     """Provider-agnostic tool definition.
 
-    Built from PayloadTemplate. Converted to provider-specific format
-    by the ProviderClient implementation.
+    Converted to provider-specific format by the ProviderClient implementation.
     """
 
     name: str
@@ -95,33 +94,6 @@ def parse_model_string(model: str) -> tuple[str, str]:
             )
         return provider, model_id
     return "anthropic", model
-
-
-def tool_spec_from_template(template: Any) -> ToolSpec:
-    """Convert a PayloadTemplate to a ToolSpec.
-
-    Args:
-        template: PayloadTemplate with tool metadata.
-
-    Returns:
-        ToolSpec suitable for any ProviderClient.
-    """
-    properties: dict[str, dict[str, str]] = {}
-    for name, info in template.tool_params.items():
-        prop: dict[str, str] = {"type": info.get("type", "string")}
-        if desc := info.get("description", ""):
-            prop["description"] = desc
-        properties[name] = prop
-
-    return ToolSpec(
-        name=template.tool_name,
-        description=template.tool_description,
-        parameters={
-            "type": "object",
-            "properties": properties,
-            "required": list(template.tool_params.keys()),
-        },
-    )
 
 
 def serialize_evidence(response: NormalizedResponse) -> str:

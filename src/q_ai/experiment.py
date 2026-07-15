@@ -1217,7 +1217,7 @@ def _condition_files(
 def _fixture_work_dir() -> Path:
     """Return the cascade fixture work directory.
 
-    Matches ``tests/fixtures/pattern_cascade_memo.work_dir`` so TEMP/TMP win
+    Matches :mod:`q_ai.ctpf.cascade_memo_fixture` so TEMP/TMP win
     over TMPDIR (which ``tempfile.gettempdir`` would otherwise honor).
     """
     # Match fixture fallback; intentional shared /tmp path for local research.
@@ -1324,13 +1324,7 @@ def _inside_git_checkout(path: Path) -> bool:
 
 
 def _fixture_command() -> str:
-    repo_root = Path(__file__).resolve().parents[2]
-    fixture = repo_root / "tests" / "fixtures" / "pattern_cascade_memo.py"
-    if not fixture.is_file():
-        raise ExperimentError(
-            "cascade fixture is unavailable; run this Phase 5a calibration from the qai checkout"
-        )
-    return f'"{sys.executable}" "{fixture}"'
+    return f'"{sys.executable}" -m q_ai.ctpf.cascade_memo_fixture'
 
 
 def _new_series_id() -> str:

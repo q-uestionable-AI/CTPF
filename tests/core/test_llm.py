@@ -9,13 +9,10 @@ import pytest
 from q_ai.core.llm import (
     NormalizedResponse,
     ToolCall,
-    ToolSpec,
     get_provider_client,
     parse_model_string,
     serialize_evidence,
-    tool_spec_from_template,
 )
-from q_ai.inject.models import InjectionTechnique, PayloadTemplate
 
 
 class TestParseModelString:
@@ -52,40 +49,6 @@ class TestParseModelString:
         provider, model_id = parse_model_string("openai/gpt-4o")
         assert provider == "openai"
         assert model_id == "gpt-4o"
-
-
-class TestToolSpecFromTemplate:
-    """Tests for tool_spec_from_template()."""
-
-    def test_converts_correctly(self) -> None:
-        template = PayloadTemplate(
-            name="test",
-            technique=InjectionTechnique.DESCRIPTION_POISONING,
-            description="Test",
-            tool_name="get_weather",
-            tool_description="A weather tool",
-            tool_params={"city": {"type": "string", "description": "City name"}},
-        )
-        spec = tool_spec_from_template(template)
-        assert isinstance(spec, ToolSpec)
-        assert spec.name == "get_weather"
-        assert spec.description == "A weather tool"
-        assert spec.parameters["type"] == "object"
-        assert "city" in spec.parameters["properties"]
-        assert spec.parameters["required"] == ["city"]
-
-    def test_no_params(self) -> None:
-        template = PayloadTemplate(
-            name="test",
-            technique=InjectionTechnique.OUTPUT_INJECTION,
-            description="Test",
-            tool_name="simple_tool",
-            tool_description="A simple tool",
-            tool_params={},
-        )
-        spec = tool_spec_from_template(template)
-        assert spec.parameters["properties"] == {}
-        assert spec.parameters["required"] == []
 
 
 class TestSerializeEvidence:

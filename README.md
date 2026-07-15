@@ -32,13 +32,12 @@ promotion under pinned conditions — they do not “falsify CTPF” as a class.
 
 The former `qai` command remains a compatibility alias for `ctpf` during the identity transition.
 
-### Libraries (not root CLI pillars)
+### Retained library and fixtures
 
-IPI document generators + headless callback, inject malicious MCP fixture servers, CXP
-context generators, and audit enumeration/SARIF export remain in-tree as libraries for
-research fixtures. They are not equal product modules on the public CLI.
-Audit-library findings can include OWASP MCP, OWASP Agentic, MITRE ATLAS, and CWE
-identifiers; audit remains a library capability rather than a root CLI surface.
+Audit enumeration and SARIF export remain in-tree as a library capability rather than a
+root CLI pillar. Audit findings can include OWASP MCP, OWASP Agentic, MITRE ATLAS, and CWE
+identifiers. Demonstrated experiment fixtures are narrow scenario/test modules; the former
+IPI, CXP, and Inject library packages are removed and must not be treated as product modules.
 
 > By [Richard Spicer](https://richardspicer.io) · [q-uestionable-AI](https://q-uestionable.ai)
 

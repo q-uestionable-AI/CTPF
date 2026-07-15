@@ -1,10 +1,10 @@
 """Path helpers for the q-ai data directory.
 
 The ``~/.qai/`` directory stores the SQLite database, framework cache,
-bridge token, managed listener state files, and IPI evidence. Because
-these contain captured request bodies, headers, and scoring data that
-may include sensitive values, the helper here centralizes creation of
-that directory so it is born with permissions ``0o700`` on POSIX.
+backups, and historical local evidence. Because these can contain captured
+request bodies, headers, and findings that may include sensitive values, the
+helper centralizes creation of that directory so it is born with permissions
+``0o700`` on POSIX.
 
 Sites that only *compute* a ``Path.home() / ".qai" / ...`` sub-path —
 without materializing a directory — do not need this helper. Only

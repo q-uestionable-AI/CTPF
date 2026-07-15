@@ -12,9 +12,13 @@ The proxy is a **client-side interception tool**. It sits between an MCP client 
 This means the proxy works when:
 
 - **You control the MCP client.** Configure Claude Desktop, Cursor, an agent framework, or other MCP clients you operate to route through the proxy for observation, self-assessment, or debugging.
-- **Library tooling drives a client you control.** Research fixtures (for example inject fixture servers or custom clients) may open MCP connections that you can point through the proxy. The proxy does not depend on removed root commands such as `qai audit` or `qai inject`.
+- **Experiment tooling drives a client you control.** The OpenAI-compatible driver opens MCP
+  connections through the proxy, and the Claude Code adapter supplies a strict loopback MCP
+  configuration to the external runtime.
 
-The proxy does **not** work when the MCP client belongs to the target. If a remote platform's internal MCP client makes the tool calls, you cannot configure that client without modifying the target. In those scenarios, use other evidence sources (IPI callbacks, agent response content, conversation logs) instead of proxy capture.
+The proxy does **not** work when a target-owned MCP client cannot be configured to use the proxy.
+Demonstrated external runtimes are admitted only when their MCP traffic remains observable and
+mutable through the controlled loopback seam.
 
 <Note>
 Once positioned in the traffic path, the proxy lets you:

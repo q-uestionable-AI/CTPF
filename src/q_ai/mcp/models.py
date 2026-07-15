@@ -1,6 +1,6 @@
 """MCP-domain data models for scanner modules.
 
-Contains core types used across audit, proxy, inject, and chain modules.
+Contains core types used across the retained audit, proxy, and experiment paths.
 Severity, ScanFinding, and ScanContext are consumed by all scanner modules
 and the orchestration layer.
 """

@@ -98,7 +98,7 @@ def create_run(
         source: Optional provenance tag (e.g. "web", "cli").
         started_at: Optional ISO-8601 timestamp for the run's wall-clock start.
             When ``None`` (the default), the current UTC time is stamped at
-            INSERT. Callers that do async work before persisting (e.g. IPI
+            INSERT. Callers that do async work before persisting (e.g. network
             sweep/probe) should capture the timestamp before the work begins
             and pass it here so stored duration reflects wall-clock duration.
 

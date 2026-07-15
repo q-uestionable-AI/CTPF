@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +34,7 @@ from q_ai.proxy.models import ProxyMessage
 
 # Disable Rich ANSI so substring assertions on --help stay stable. With color
 # enabled, option names like `--model` can render as ANSI-split spans and break
-# literal matches (same pattern as tests/ipi/test_sweep_cli.py).
+# literal matches in help output.
 _NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "TERM": "dumb"}
 _cli_runner = CliRunner(env=_NO_COLOR_ENV)
 
@@ -643,6 +644,10 @@ class TestExperimentCli:
 
 class TestFixtureArtifactPaths:
     """Director must locate artifacts where the cascade fixture writes them."""
+
+    def test_uses_packaged_fixture_module(self) -> None:
+        command = experiment._fixture_command()
+        assert command == f'"{sys.executable}" -m q_ai.ctpf.cascade_memo_fixture'
 
     def test_prefers_temp_over_tmpdir(
         self,

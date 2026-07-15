@@ -55,37 +55,18 @@
         "pages": [
           "config/providers",
           "config/transports",
-          "config/callback-server",
-          "config/dangerous-payloads",
           "config/environment-variables"
         ]
       },
       {
-        "group": "Libraries",
+        "group": "Audit Library",
         "pages": [
           "audit/overview",
           "audit/cli",
           "audit/scanners",
           "audit/framework-coverage",
           "audit/sarif-output",
-          "audit/fixtures",
-          "inject/overview",
-          "inject/cli",
-          "inject/payloads",
-          "ipi/overview",
-          "ipi/cli",
-          "ipi/techniques",
-          "ipi/formats",
-          "ipi/templates",
-          "ipi/payloads",
-          "ipi/callbacks",
-          "ipi/deployment-playbook",
-          "cxp/overview",
-          "cxp/cli",
-          "cxp/objectives",
-          "cxp/assistant-formats",
-          "cxp/validation",
-          "cxp/deployment-playbook"
+          "audit/fixtures"
         ]
       },
       {
@@ -105,10 +86,7 @@
           "architecture/overview",
           "architecture/core",
           "architecture/proxy-module",
-          "architecture/audit-module",
-          "architecture/inject-module",
-          "architecture/ipi-module",
-          "architecture/cxp-module"
+          "architecture/audit-module"
         ]
       }
     ]
@@ -140,8 +118,33 @@
       "permanent": true
     },
     {
-      "source": "/inject/campaigns",
-      "destination": "/inject/overview",
+      "source": "/inject/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/ipi/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/cxp/:slug*",
+      "destination": "/introduction",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/inject-module",
+      "destination": "/architecture/overview",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/ipi-module",
+      "destination": "/architecture/overview",
+      "permanent": true
+    },
+    {
+      "source": "/architecture/cxp-module",
+      "destination": "/architecture/overview",
       "permanent": true
     },
     {

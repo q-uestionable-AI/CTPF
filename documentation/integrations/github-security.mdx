@@ -49,9 +49,6 @@ jobs:
             --command "npx @modelcontextprotocol/server-memory" \
             --format sarif \
             --output results.sarif
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         with:

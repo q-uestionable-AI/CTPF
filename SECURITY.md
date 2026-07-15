@@ -21,13 +21,13 @@ CTPF Research Harness is a security testing tool. Vulnerabilities in the tool it
 - API key exposure via the keyring integration or config files
 - Dependency vulnerabilities with exploitable paths
 - Unsafe deserialization of findings, MCP messages, or fixture payloads
-- Local listener issues (IPI headless callback, proxy HTTP listen adapters) including SSRF or path traversal in file outputs
+- Local proxy-listener issues including SSRF or path traversal in file outputs
 
 Out of scope: vulnerabilities in third-party MCP servers or AI systems discovered *by* the tool — those should be reported to the relevant vendor.
 
 ## Evidence at Rest
 
-CTPF Research Harness stores run artifacts locally in plaintext under `~/.qai/`. The SQLite database at `~/.qai/qai.db` includes IPI callback hit bodies, headers, source IPs, user agents, proxy session data, and other finding evidence. Payload documents, exports, and backups live alongside it under the same directory.
+CTPF Research Harness stores operational records locally in plaintext under `~/.qai/`. The SQLite database at `~/.qai/qai.db` includes proxy session data and other finding evidence; upgraded databases may also retain historical records from removed modules. Controlled experiment traces and evidence bundles are written to the operator-selected directory outside the Git checkout.
 
 Access control relies on filesystem permissions. On POSIX, `~/.qai/` is created with mode `0o700`; any pre-existing wider mode is narrowed on the next harness startup. On Windows the default user-profile ACLs apply — the harness does not set additional ACL restrictions there.
 
@@ -37,4 +37,4 @@ To purge or rotate evidence: `ctpf db reset` wipes the database entirely; `ctpf 
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 0.12.x  | Yes       |

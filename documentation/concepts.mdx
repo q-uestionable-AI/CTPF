@@ -1,6 +1,6 @@
 ---
 title: Core Concepts
-description: MCP threat model, CTPF framing, and libraries vs public CLI
+description: MCP threat model, CTPF framing, and retained surfaces
 ---
 
 ## What is MCP?
@@ -25,11 +25,11 @@ research program outside this docs tree.
 
 | Surface | Role |
 |---------|------|
-| **Public CLI** | `qai proxy`, `targets`, `runs`, `findings`, `config`, `db` |
-| **Libraries** | `audit`, `inject`, `ipi`, `cxp` — fixtures and research code; not root pillars |
+| **Public CLI** | `ctpf proxy`, `experiment`, `targets`, `runs`, `findings`, `config`, `db` |
+| **Library** | `audit` — enumeration, scanners, and report exports; not a root pillar |
 
-Removed Phase 1 surfaces (do not document as current product): Web UI, Assistant,
-Chain, RXP, External Tool Import, inject campaigns.
+Removed surfaces (do not document as current product): Web UI, Assistant, Chain, RXP,
+External Tool Import, IPI, CXP, and Inject.
 
 ## OWASP MCP Top 10
 
@@ -84,7 +84,7 @@ CTPF Research Harness tests **agent infrastructure** — the servers, tools, and
 
 Proxy observation asks what happens when that untrusted content crosses into a higher-trust action path without preserved provenance or scope.
 
-## Library methodologies (fixtures)
+## Retained methodologies
 
 ### Proxy — Observe and mutate
 
@@ -94,36 +94,16 @@ Sit between a client you control and an MCP server. Capture traffic, optionally 
 
 Connect to a server, enumerate tools/resources/prompts, run scanners mapped to OWASP MCP categories, export structured reports (including SARIF). Invoked as library code — not `qai audit`.
 
-### Inject — Fixture servers (library)
+### Controlled experiments
 
-Serve malicious MCP tools via `build_server` / `python -m q_ai.inject`. Campaign scoring paths are removed.
-
-### IPI — Generate and listen (library)
-
-Generate adversarial documents and run a headless callback listener (`python -m q_ai.ipi`) for out-of-band proof of execution when authorized.
-
-### CXP — Context file fixtures (library)
-
-Build poisoned instruction files for coding assistants and validate captured assistant output against detection rules. This targets **coding assistants under test**, not a removed product “Assist” module.
-
-## Callback-based verification (IPI library)
-
-IPI payloads can embed a unique callback URL containing a cryptographic token. When an agent executes the hidden instruction, it may fire an HTTP request to the listener. Confidence scoring distinguishes token-backed hits from noise.
-
-Local listeners bind to `127.0.0.1` only. Optional tunnel mode for remote targets is documented under [IPI callbacks](/ipi/callbacks).
-
-## Payload styles vs payload types (IPI)
-
-**Payload styles** control how the injection blends into document content (`obvious`, `citation`, `reviewer`, etc.).
-
-**Payload types** define the instructed action (`callback`, exfil variants, SSRF, instruction override, tool abuse, persistence). Dangerous types require an explicit `--dangerous` flag — see [Dangerous Payloads](/config/dangerous-payloads).
+The narrow `cascade-memo` experiment owns its packaged honest fixture, proxy mutation,
+target adapter, trace parsing, effect oracle, and evidence bundle. Historical local calibration
+and proxy integration fixtures remain test equipment; no generic fixture hierarchy exists.
 
 ## Surface summary
 
 | Area | Attack / observation surface | Role after Phase 1 |
 |------|------------------------------|--------------------|
 | **proxy** | MCP client↔server traffic | Public CLI center |
+| **ctpf experiment** | Controlled trust-transition scenarios | Public CLI research seam |
 | **audit** | MCP server capabilities | Library |
-| **inject** | Malicious MCP fixtures | Library (`build_server`) |
-| **ipi** | Document ingestion + callbacks | Library (`python -m q_ai.ipi`) |
-| **cxp** | Coding-assistant instruction files | Library |

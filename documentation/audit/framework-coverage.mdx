@@ -46,7 +46,9 @@ Active scanners invoke tools on the target server. Only scan servers you own, co
 | `context_sharing` | Response content and resource scoping | Cross-session isolation or context persistence across reconnections |
 
 <Note>
-The `inject` module provides deeper testing for MCP03 and MCP06 by measuring actual agent responses to poisoned tools. The `chain` module composes findings across categories into multi-step attack paths.
+The audit library reports static and active scanner observations. Controlled agent-response
+experiments belong to the narrow `ctpf experiment` workflow and are not inferred from audit
+categories alone.
 </Note>
 
 ## OWASP Agentic Top 10

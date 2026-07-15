@@ -30,29 +30,24 @@ pinned conditions — they do not “falsify CTPF” as a class.
 The former `qai` executable remains a compatibility alias and invokes the same application and
 local state. See [Identity Compatibility](/identity-compatibility) for the retained names.
 
-New verbs such as `inspect` / `evidence` are deferred until a CTPF experiment defines
-a real interface.
+New verbs such as `inspect`, `evidence`, or `fixture` are deferred until a demonstrated
+experiment defines a real interface.
 
-## Libraries (not root CLI pillars)
+## Retained library and fixtures
 
-These packages remain in-tree as research fixtures and library tooling. They are **not**
-equal product modules on the public `ctpf` CLI:
+Audit remains in-tree as library tooling, not an equal product module on the public CLI:
 
 | Library | Role |
 |---------|------|
 | **audit** | Capability enumeration / scanners; SARIF and other report exports |
-| **inject** | Malicious MCP fixture servers (`build_server` + payload templates) |
-| **ipi** | Document generators + headless callback listener |
-| **cxp** | Coding-assistant context-file generators |
-
-Invoke library CLIs via `python -m` (for example `python -m q_ai.ipi`,
-`python -m q_ai.inject`) or import the package APIs directly.
+Demonstrated experiment fixtures are narrow scenario or test modules. The packaged cascade
+fixture is internal to `ctpf experiment`; it is not a separate fixture CLI or framework.
 
 ## Removed in Phase 1
 
-The former seven-module platform surfaces are gone: Web UI (`qai ui`), Assistant,
-Chain, RXP, External Tool Import, orchestrator, and inject campaigns. Do not expect
-those commands or workflows in current releases.
+The former platform surfaces are gone: Web UI (`qai ui`), Assistant, Chain, RXP,
+External Tool Import, orchestrator, IPI, CXP, and Inject. Do not expect those packages,
+commands, or workflows in current releases.
 
 ## Framework mappings (library audit)
 

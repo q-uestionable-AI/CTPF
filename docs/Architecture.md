@@ -17,32 +17,30 @@ the `ctpf` CLI. The former `qai` executable remains a compatibility alias.
 | --- | --- |
 | `proxy` | Capture, intercept, live modify, export MCP traffic (Textual TUI) |
 | `mcp` | MCP transports and sessions (stdio, SSE, streamable HTTP) |
-| `core` | Shared models, SQLite persistence, config, credentials, providers |
+| `core` | Shared models, SQLite persistence, config, credentials, LLM protocol |
+| `ctpf` | Trust-transition kernel, trace parsing, evidence bundles, cascade fixture |
+| experiment adapters | Cascade director, OpenAI-compatible driver, Claude Code CLI runtime |
 
-**Library modules** (not public CLI pillars; used as fixtures / research code):
+**Library modules** (not public CLI pillars):
 
 | Area | Responsibility |
 | --- | --- |
 | `audit` | Capability enumeration / scanners; SARIF export |
-| `ipi` | Document generators + headless callback listener |
-| `cxp` | Coding-assistant context-file generators |
-| `inject` | Malicious MCP fixture servers (`build_server` + payload templates) |
 
 **Removed in Phase 1** (do not restore without explicit instruction): Web UI
-(`server/`), `assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, and the
-inject campaign/scoring path.
+(`server/`), `assist/`, `rxp/`, `chain/`, `orchestrator/`, `imports/`, `ipi/`,
+`cxp/`, and `inject/`.
 
-Transitional public CLI verbs: `proxy`, `targets`, `runs`, `findings`, `config`,
-`db`, `--version`. New verbs such as `inspect` / `evidence` are deferred until
-a CTPF experiment defines a real interface.
+Public CLI verbs: `proxy`, `experiment`, `targets`, `runs`, `findings`, `config`,
+`db`, `--version`. New verbs such as `inspect`, `evidence`, or `fixture` are deferred
+until a demonstrated experiment defines a real interface.
 
 ## Shared Backbone
 
 Persistence is a local SQLite database (`~/.qai/qai.db`). The common schema
 centers on `targets`, `runs`, `findings`, `evidence`, and `settings`, with
-additional tables retained for historical module data (proxy sessions, IPI hits,
-legacy chain/inject/RXP tables may still exist for old DBs even when writers are
-gone).
+additional tables retained for historical module data. IPI, CXP, Inject, Chain, and
+RXP tables may still exist for old databases even though their writers are gone.
 
 `services/db_service.py` provides shared database helpers used by the
 transitional CLI. Other former “service layer” UI/workflow helpers were removed
@@ -53,8 +51,8 @@ with the Web UI and orchestrator.
 ### Core Boundary
 
 `core` owns durable cross-cutting contracts: database access, schema migration,
-shared data models, configuration, credential lookup (OS keyring), and
-provider/model abstractions.
+shared data models, configuration, credential lookup (OS keyring), and the
+provider-agnostic protocol used by driven inference.
 
 ### MCP Boundary
 
@@ -71,32 +69,25 @@ agent counterfactual replay is not assumed.
 
 ### Operator Surface
 
-`cli.py` is the only public product surface. Library Typer apps (for example
-`python -m q_ai.ipi`, `python -m q_ai.inject`) may remain for fixture workflows
-but are not root `ctpf` pillars.
+`cli.py` is the only public product surface. Demonstrated fixture modules are
+implementation equipment behind the narrow experiment command, not independent CLIs.
 
 ## LLM Boundary
 
-Provider-facing code stays behind shared core interfaces (`core.llm`,
-`core.providers`, LiteLLM-backed implementation). Modules that need models
-consume that boundary rather than embedding provider SDKs directly.
+Provider-facing code stays behind `core.llm` and the LiteLLM-backed implementation.
+The demonstrated remote target is OpenAI-compatible; the independent Claude Code adapter
+uses runtime-managed authentication rather than an embedded provider SDK.
 
 ## Security and Trust Invariants
 
-- Any local HTTP listener (IPI headless callback, proxy listen adapters) binds
-  to `127.0.0.1` only — never `0.0.0.0` or external interfaces for product
-  surfaces.
+- Any CTPF-owned local HTTP listener or proxy adapter binds to `127.0.0.1` only.
 - Non-secret settings and credentials use separate paths: ordinary settings in
   config/database stores; API keys only in the OS keyring.
-- The IPI callback listener may optionally expose itself via a tunnel adapter
-  (`--tunnel cloudflare`) for testing remote/cloud AI targets. When tunneled,
-  the listener trusts only the `CF-Connecting-IP` header for source-IP
-  resolution and ignores `X-Forwarded-For`. Public-exposure hardening
-  (body-size limits, per-IP rate limiting, conservative timeouts) applies in
-  tunnel mode; local-only listener behavior is unchanged.
-- At most one tunneled IPI callback listener should exist on a host at a time.
-  The active-callback state file (`~/.qai/active-callback`) is the single-writer
-  coordination point for CLI-launched listeners.
+- API keys are read only from the OS keyring. The Claude Code target uses the
+  runtime's secure login and receives a minimal non-secret environment.
+- The packaged cascade fixture is the only runtime experiment fixture. Historical
+  calibration and proxy fixtures remain under `tests/fixtures/`; no generic fixture
+  hierarchy or `ctpf fixture` command exists.
 
 ## What This Document Intentionally Omits
 

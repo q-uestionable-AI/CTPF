@@ -3,7 +3,8 @@ title: Responsible Use
 description: Authorized use requirements and responsible disclosure
 ---
 
-q-ai is a security testing tool. It scans servers for vulnerabilities, generates adversarial payloads, intercepts traffic, tests AI agent susceptibility to injection attacks, and tracks execution via out-of-band callbacks.
+CTPF Research Harness is a security testing tool. It scans authorized MCP servers,
+intercepts controlled traffic, mutates declared messages, and records attributable effects.
 
 ## Authorized Testing Only
 
@@ -21,21 +22,9 @@ Running q-ai against a system without authorization may violate the Computer Fra
 
 If you are unsure whether you have authorization, you do not have authorization. Authorization requires explicit, documented permission — not implied permission, not assumed permission because you have credentials or API access, and not retroactive permission after testing has begun.
 
-For bug bounty programs, verify that MCP servers, AI agent infrastructure, and document ingestion pipelines are explicitly in scope before running any active scans, injection tests, or payload deployments.
-
-## IPI Module Authorization
-
-The IPI module generates adversarial documents and deploys them to track whether AI agents execute hidden instructions. This module requires explicit authorization for all testing.
-
-<Warning>
-IPI is the only module where you upload adversarial documents to third-party services. Ensure you have explicit written authorization to deploy payloads to the target system before using IPI.
-</Warning>
-
-## Dangerous Payloads
-
-The `--dangerous` flag enables IPI payload types that go beyond callback verification — data exfiltration, SSRF, and behavior modification. These payloads cause target systems to take real actions with real consequences.
-
-Use dangerous payloads only in isolated test environments where you fully control the blast radius. Verify that no sensitive data is at risk before deploying exfiltration payloads.
+For bug bounty programs, verify that MCP servers and AI agent infrastructure are explicitly
+in scope before running active scans, proxy mutations, or controlled experiments. External
+effects must be restricted to authorized, run-scoped sinks.
 
 ## Responsible Disclosure
 
@@ -49,6 +38,7 @@ For vulnerabilities in CTPF Research Harness itself, see [SECURITY.md](https://g
 
 ## Intended Use
 
-q-ai is for authorized security testing and research. It is not a general-purpose automation tool and should not be used to attack systems outside a controlled testing context.
+CTPF Research Harness is for authorized security testing and research. It is not a
+general-purpose automation tool and should not be used outside a controlled testing context.
 
 Use findings to improve the security posture of the systems you are responsible for protecting.

@@ -32,18 +32,13 @@ Preferred CLI: `ctpf` (`qai` remains a compatibility alias)
 
 ## Configuration
 
-- [Providers](https://ctpf.q-uestionable.ai/config/providers): Provider settings and keyring credentials
+- [Inference Targets](https://ctpf.q-uestionable.ai/config/providers): OpenAI-compatible target pins and keyring credentials
 - [Transports](https://ctpf.q-uestionable.ai/config/transports): MCP transport configuration
-- [Callback Server](https://ctpf.q-uestionable.ai/config/callback-server): IPI callback configuration
-- [Dangerous Payloads](https://ctpf.q-uestionable.ai/config/dangerous-payloads): High-risk fixture controls
-- [Environment Variables](https://ctpf.q-uestionable.ai/config/environment-variables): Retained `QAI_*` variables
+- [Environment Variables](https://ctpf.q-uestionable.ai/config/environment-variables): Non-secret environment behavior
 
-## Research Libraries and Fixtures
+## Audit Library
 
 - [Audit Overview](https://ctpf.q-uestionable.ai/audit/overview): Capability enumeration and scanners
-- [Inject Overview](https://ctpf.q-uestionable.ai/inject/overview): Malicious MCP fixture servers
-- [IPI Overview](https://ctpf.q-uestionable.ai/ipi/overview): Document generators and callbacks
-- [CXP Overview](https://ctpf.q-uestionable.ai/cxp/overview): Coding-assistant context fixtures
 
 ## Exports and Integrations
 
@@ -60,6 +55,3 @@ Preferred CLI: `ctpf` (`qai` remains a compatibility alias)
 - [Core](https://ctpf.q-uestionable.ai/architecture/core): Shared database and configuration
 - [Proxy](https://ctpf.q-uestionable.ai/architecture/proxy-module): Traffic observation and control
 - [Audit](https://ctpf.q-uestionable.ai/architecture/audit-module): Scanner library
-- [Inject](https://ctpf.q-uestionable.ai/architecture/inject-module): Fixture server library
-- [IPI](https://ctpf.q-uestionable.ai/architecture/ipi-module): Document and callback library
-- [CXP](https://ctpf.q-uestionable.ai/architecture/cxp-module): Context-fixture library

@@ -47,34 +47,27 @@ class TestCredentials:
             set_credential("anthropic", "sk-test-123")
         mock_kr.set_password.assert_called_once_with("q-ai", "anthropic", "sk-test-123")
 
-    def test_get_credential_from_keyring(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """get_credential reads from keyring when env var not set."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    def test_get_credential_from_keyring(self) -> None:
+        """get_credential reads from keyring."""
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = "sk-test-123"
             result = get_credential("anthropic")
         assert result == "sk-test-123"
 
-    def test_get_credential_env_var_precedence(
+    def test_get_credential_ignores_environment_variable(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Env var takes precedence over keyring."""
+        """Environment variables never override the keyring."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = "sk-from-keyring"
             result = get_credential("anthropic")
-        assert result == "sk-from-env"
+        assert result == "sk-from-keyring"
+        mock_kr.get_password.assert_called_once_with("q-ai", "anthropic")
 
-    def test_get_credential_missing_provider(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_get_credential_missing_provider(self) -> None:
         """Missing provider returns None."""
-        monkeypatch.delenv("NONEXISTENT_API_KEY", raising=False)
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = None
             assert get_credential("nonexistent") is None

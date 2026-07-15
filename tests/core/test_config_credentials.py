@@ -20,34 +20,32 @@ from q_ai.core.config import (
 class TestGetCredential:
     """Tests for get_credential()."""
 
-    def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Env var takes precedence over keyring."""
+    def test_ignores_environment_variable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Environment variables never override the keyring."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
-        with patch("q_ai.core.config.keyring") as mock_kr:
-            mock_kr.get_password.return_value = "sk-from-keyring"
-            result = get_credential("anthropic")
-        assert result == "sk-from-env"
-
-    def test_from_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Keyring is used when env var is not set."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = "sk-from-keyring"
             result = get_credential("anthropic")
         assert result == "sk-from-keyring"
         mock_kr.get_password.assert_called_once_with(_KEYRING_SERVICE, "anthropic")
 
-    def test_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when neither env var nor keyring has value."""
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    def test_from_keyring(self) -> None:
+        """Keyring is the credential source."""
+        with patch("q_ai.core.config.keyring") as mock_kr:
+            mock_kr.get_password.return_value = "sk-from-keyring"
+            result = get_credential("anthropic")
+        assert result == "sk-from-keyring"
+        mock_kr.get_password.assert_called_once_with(_KEYRING_SERVICE, "anthropic")
+
+    def test_not_found(self) -> None:
+        """Returns None when the keyring has no value."""
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = None
             result = get_credential("openai")
         assert result is None
 
-    def test_normalises_provider_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_normalises_provider_name(self) -> None:
         """Mixed case and whitespace are normalised before lookup."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_password.return_value = "sk-key"
             result = get_credential("  Anthropic ")
@@ -114,24 +112,24 @@ class TestInsecureBackendGuard:
             with pytest.raises(RuntimeError, match="Insecure keyring backend"):
                 set_credential("openai", "sk-test")
 
-    def test_get_credential_insecure_backend_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """get_credential raises RuntimeError when env var absent and backend insecure."""
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    def test_get_credential_insecure_backend_raises(self) -> None:
+        """get_credential raises RuntimeError when the backend is insecure."""
         fake_backend = type("PlaintextKeyring", (), {})()
         with patch("q_ai.core.config.keyring") as mock_kr:
             mock_kr.get_keyring.return_value = fake_backend
             with pytest.raises(RuntimeError, match="Insecure keyring backend"):
                 get_credential("anthropic")
 
-    def test_get_credential_env_var_bypasses_backend_check(
+    def test_environment_variable_cannot_bypass_backend_check(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Env var path returns without touching keyring, even if backend is insecure."""
+        """An environment variable cannot bypass an insecure keyring backend."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
-        # Don't mock keyring at all — if it were called, the real backend
-        # would be hit. The point is the env-var path returns early.
-        result = get_credential("anthropic")
-        assert result == "sk-from-env"
+        fake_backend = type("PlaintextKeyring", (), {})()
+        with patch("q_ai.core.config.keyring") as mock_kr:
+            mock_kr.get_keyring.return_value = fake_backend
+            with pytest.raises(RuntimeError, match="Insecure keyring backend"):
+                get_credential("anthropic")
 
 
 class TestImportLegacyCredentials:
