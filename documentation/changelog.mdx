@@ -5,6 +5,12 @@ description: Release history for CTPF Research Harness
 
 ## Unreleased
 
+## 0.14.0 / 2026-07-15
+
+Completes the canonical CTPF identity cutover after the v0.13.0 Reconnect baseline. This release
+intentionally removes the temporary compatibility surfaces; existing v0.13.0 artifacts and
+historical evidence remain unchanged.
+
 ### Changed
 
 - Make `ctpf` the canonical Python import package and move the trust-transition implementation
@@ -14,6 +20,11 @@ description: Release history for CTPF Research Harness
   experiment pins. Historical evidence and prior release records remain unchanged.
 - Document audit as the retained Python library it is; the root CLI does not expose an
   `audit` command.
+
+### Security
+
+- Create the default `~/.ctpf/` data directory through the hardened path helper so POSIX mode
+  `0o700` is enforced before the SQLite evidence database is opened.
 
 ### Removed
 
