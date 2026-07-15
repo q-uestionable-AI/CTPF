@@ -41,7 +41,7 @@ def _profile() -> ClaudeCodeTargetProfile:
         name="claude research runtime",
         executable="C:/tools/claude.exe",
         model="claude-opus-4-1-20250805",
-        runtime_version="2.1.114 (Claude Code)",
+        runtime_version="2.1.121 (Claude Code)",
         timeout_seconds=90,
     )
 
@@ -79,7 +79,7 @@ class TestClaudeCodeTargetProfile:
         monkeypatch.setattr(
             external_runtime,
             "_inspect_claude_executable",
-            lambda _raw: ("C:/tools/claude.exe", "2.1.114 (Claude Code)"),
+            lambda _raw: ("C:/tools/claude.exe", "2.1.121 (Claude Code)"),
         )
 
         profile = load_experiment_target_profile(target_id[:8], db_path=db_path)
@@ -87,8 +87,33 @@ class TestClaudeCodeTargetProfile:
         assert isinstance(profile, ClaudeCodeTargetProfile)
         assert profile.model == "claude-opus-4-1-20250805"
         assert profile.timeout_seconds == 90
-        assert profile.runtime_version == "2.1.114 (Claude Code)"
+        assert profile.runtime_version == "2.1.121 (Claude Code)"
         assert "credential" not in json.dumps(profile.evidence_payload()).lower()
+
+    @pytest.mark.parametrize(
+        ("version", "message"),
+        [
+            ("2.1.120 (Claude Code)", "2.1.121 or later"),
+            ("unexpected", "invalid version"),
+        ],
+    )
+    def test_rejects_runtime_without_always_load_support(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        version: str,
+        message: str,
+    ) -> None:
+        db_path = tmp_path / "qai.db"
+        target_id = _create_runtime_target(db_path)
+        monkeypatch.setattr(
+            external_runtime,
+            "_inspect_claude_executable",
+            lambda _raw: ("C:/tools/claude.exe", version),
+        )
+
+        with pytest.raises(ExternalRuntimeError, match=message):
+            load_experiment_target_profile(target_id[:8], db_path=db_path)
 
     def test_preserves_existing_inference_target_dispatch(self, tmp_path: Path) -> None:
         db_path = tmp_path / "qai.db"

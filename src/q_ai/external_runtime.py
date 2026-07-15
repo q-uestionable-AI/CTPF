@@ -28,6 +28,7 @@ _DEFAULT_TIMEOUT_SECONDS = 300
 _MIN_TIMEOUT_SECONDS = 30
 _MAX_TIMEOUT_SECONDS = 1800
 _VERSION_TIMEOUT_SECONDS = 10.0
+_MIN_ALWAYS_LOAD_VERSION = (2, 1, 121)
 _MODEL_ALIASES = frozenset({"default", "fable", "haiku", "opus", "sonnet"})
 _SECRET_METADATA_KEYS = frozenset(
     {
@@ -247,6 +248,7 @@ def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
         raise ExternalRuntimeError(f"unsupported external runtime driver: {driver!r}")
     model = _exact_model(metadata)
     executable, version = _inspect_claude_executable(target.uri)
+    _require_always_load_support(version)
     return ClaudeCodeTargetProfile(
         target_id=target.id,
         name=target.name,
@@ -307,6 +309,29 @@ def _inspect_claude_executable(raw: str | None) -> tuple[str, str]:
     if completed.returncode != 0 or not version:
         raise ExternalRuntimeError("Claude Code version check returned no usable version")
     return executable, version
+
+
+def _require_always_load_support(version: str) -> None:
+    parsed = _parse_runtime_version(version)
+    if parsed >= _MIN_ALWAYS_LOAD_VERSION:
+        return
+    minimum = ".".join(str(part) for part in _MIN_ALWAYS_LOAD_VERSION)
+    raise ExternalRuntimeError(
+        f"Claude Code {minimum} or later is required for deterministic MCP readiness; "
+        f"found {version!r}"
+    )
+
+
+def _parse_runtime_version(version: str) -> tuple[int, int, int]:
+    prefix = version.split(maxsplit=1)[0]
+    parts = prefix.split(".")
+    if len(parts) != 3:
+        raise ExternalRuntimeError(f"Claude Code returned an invalid version: {version!r}")
+    try:
+        major, minor, patch = (int(part) for part in parts)
+    except ValueError as exc:
+        raise ExternalRuntimeError(f"Claude Code returned an invalid version: {version!r}") from exc
+    return major, minor, patch
 
 
 def _mcp_config(mcp_endpoint: str) -> dict[str, Any]:
