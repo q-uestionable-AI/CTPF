@@ -19,6 +19,8 @@ def test_add_help_uses_canonical_ctpf_name() -> None:
 
     assert result.exit_code == 0
     assert "ctpf targets add" in result.output
+    assert "driver=openai-compatible" in result.output
+    assert "agent-runtime" in result.output
 
 
 class TestTargetsList:

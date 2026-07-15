@@ -11,7 +11,7 @@ from rich.table import Table
 from ctpf.core.db import get_connection, list_findings
 from ctpf.core.models import Severity
 
-app = typer.Typer(name="findings", help="Manage security findings.", no_args_is_help=True)
+app = typer.Typer(name="findings", help="Manage stored findings.", no_args_is_help=True)
 console = Console()
 
 
@@ -29,7 +29,7 @@ def list_cmd(
     limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
     db_path: Path | None = typer.Option(None, hidden=True),
 ) -> None:
-    """List security findings."""
+    """List stored findings."""
     min_sev = Severity[severity.upper()] if severity else None
     with get_connection(db_path) as conn:
         findings = list_findings(

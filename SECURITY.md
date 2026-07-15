@@ -20,7 +20,7 @@ CTPF Research Harness is a security testing tool. Vulnerabilities in the tool it
 - Credential leakage in reports, logs, or local artifacts
 - API key exposure via the keyring integration or config files
 - Dependency vulnerabilities with exploitable paths
-- Unsafe deserialization of findings, MCP messages, or fixture payloads
+- Unsafe deserialization of findings, MCP messages, experiment evidence, or fixture payloads
 - Local proxy-listener issues including SSRF or path traversal in file outputs
 
 Out of scope: vulnerabilities in third-party MCP servers or AI systems discovered *by* the tool — those should be reported to the relevant vendor.
@@ -31,10 +31,18 @@ CTPF Research Harness stores operational records locally in plaintext under `~/.
 
 Access control relies on filesystem permissions. On POSIX, `~/.ctpf/` is created with mode `0o700`; any pre-existing wider mode is narrowed on the next harness startup. On Windows the default user-profile ACLs apply — the harness does not set additional ACL restrictions there.
 
+Experiment traces and bundles can contain model output, tool arguments, protocol messages, and
+operator-supplied target metadata. Review an evidence bundle before sharing or publishing it even
+when its built-in secret-pattern scan reports no hits.
+
 To purge or rotate evidence: `ctpf db reset` wipes the database entirely; `ctpf runs delete <run_id>` removes a specific run and its findings; `ctpf db backup` takes a timestamped snapshot before destructive operations.
 
 ## Supported Versions
 
 | Version | Supported |
 |---------|-----------|
-| 0.12.x  | Yes       |
+| 0.14.x  | Yes       |
+| 0.13.x and earlier | No |
+
+Unreleased `main` is development source, not a separately supported `0.14.0` distribution. Security
+fixes target the latest supported release line and current development branch.

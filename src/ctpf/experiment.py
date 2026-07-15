@@ -420,7 +420,7 @@ def run_cascade_memo_cli(
     target: Annotated[
         list[str] | None,
         typer.Option(
-            help="Experiment target ID prefix; repeat inference targets for a driven matrix."
+            help="Target ID prefix (at least 8 characters); repeat targets for a driven matrix."
         ),
     ] = None,
     trials: Annotated[
@@ -471,9 +471,6 @@ def run_cascade_memo_cli(
         "--meta driver=openai-compatible --meta model=MODEL "
         "--meta credential=KEYRING_NAME\n"
         "Store the key with: ctpf config set-credential KEYRING_NAME\n"
-        "External runtime: ctpf targets add NAME claude --type agent-runtime "
-        "--meta driver=claude-code-cli --meta model=EXACT_MODEL_ID "
-        "--meta timeout_seconds=300"
     ),
 )
 def run_pattern2_cli(
@@ -487,7 +484,7 @@ def run_pattern2_cli(
     ] = None,
     target: Annotated[
         str | None,
-        typer.Option(help="Experiment target ID prefix for a fully driven series."),
+        typer.Option(help="Target ID prefix (at least 8 characters) for a fully driven series."),
     ] = None,
     listen_port: Annotated[
         int,

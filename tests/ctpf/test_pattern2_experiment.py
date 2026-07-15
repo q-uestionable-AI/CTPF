@@ -339,7 +339,7 @@ class TestPattern2Cli:
         assert "--output-root" in result.output
         assert "--trials" not in result.output
         assert "driver=openai-compatible" in result.output
-        assert "driver=claude-code-cli" in result.output
+        assert "driver=claude-code-cli" not in result.output
 
     def test_repo_output_is_rejected_before_live_run(self) -> None:
         result = _cli_runner.invoke(

@@ -17,7 +17,11 @@ from ctpf.core.cli.prompt import (
 from ctpf.core.db import create_target, get_connection, get_target, list_targets
 from ctpf.services.db_service import delete_target, resolve_partial_id
 
-app = typer.Typer(name="targets", help="Manage MCP and inference targets.", no_args_is_help=True)
+app = typer.Typer(
+    name="targets",
+    help="Manage MCP, inference, and external agent-runtime targets.",
+    no_args_is_help=True,
+)
 console = Console()
 
 
@@ -49,9 +53,13 @@ def list_cmd(
         "Examples:\n"
         '  ctpf targets add "My Server" http://localhost:3000/sse\n'
         '  ctpf targets add "Local MCP" http://localhost:8080 --meta transport=sse\n'
+        '  ctpf targets add "Local Model" http://localhost:1234/v1 --type inference '
+        "--meta driver=openai-compatible --meta model=MODEL "
+        "--meta credential=KEYRING_NAME\n"
         "  ctpf targets add  (interactive — prompts for name and URI)\n"
         "\n"
-        "Common --meta keys: transport, environment, owner, notes"
+        "Experiment --meta keys: driver, model, credential, max_tokens, temperature, seed, "
+        "reasoning_effort, timeout_seconds"
     ),
 )
 def add_cmd(
@@ -67,7 +75,7 @@ def add_cmd(
         "server",
         "--type",
         "-t",
-        help="Target type (e.g. server, endpoint).",
+        help="Target type (server, inference, or agent-runtime).",
     ),
     meta: list[str] | None = typer.Option(
         None,
@@ -84,7 +92,7 @@ def add_cmd(
     Args:
         name: Target name. Prompted interactively if omitted in a TTY.
         uri: Target URI. Prompted interactively if omitted in a TTY.
-        type: Target type (e.g. server, endpoint). Defaults to "server".
+        type: Target type (server, inference, or agent-runtime). Defaults to "server".
         meta: Metadata as repeatable key=value strings.
         db_path: Database path override (hidden, for testing).
 

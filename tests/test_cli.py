@@ -12,7 +12,7 @@ from ctpf.cli import app
 runner = CliRunner()
 
 _DISPLAY_NAME = "CTPF Research Harness"
-_SUBTITLE = "Trust-boundary testing for agentic systems"
+_SUBTITLE = "Evidence-first capability-trust experiments for agentic systems"
 
 
 class TestCLIHelp:
@@ -22,7 +22,7 @@ class TestCLIHelp:
         result = runner.invoke(app, ["--help"], prog_name="ctpf")
         assert result.exit_code == 0
         assert _DISPLAY_NAME in result.output
-        assert _SUBTITLE in result.output
+        assert _SUBTITLE in " ".join(result.output.split())
 
     def test_help_shows_transitional_commands(self) -> None:
         result = runner.invoke(app, ["--help"])
@@ -78,6 +78,7 @@ class TestBareCLI:
         assert "Quick Start" in result.output
         assert _DISPLAY_NAME in result.output
         assert _SUBTITLE in normalized_output
+        assert result.output.index("ctpf experiment") < result.output.index("ctpf proxy")
         assert "ctpf proxy" in result.output
         assert "ctpf targets" in result.output
 
