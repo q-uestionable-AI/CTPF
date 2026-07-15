@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,30 @@ class _FakeProcess:
         self.returncode = -1
 
     async def wait(self) -> int:
+        return self.returncode or 0
+
+
+class _SignalIgnoringProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+        self.killed = False
+        self._exited = asyncio.Event()
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        await asyncio.Event().wait()
+        return b"", b""
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self._exited.set()
+
+    async def wait(self) -> int:
+        await self._exited.wait()
         return self.returncode or 0
 
 
@@ -223,14 +248,16 @@ class TestClaudeCodeDriver:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         process = _FakeProcess("", returncode=None)
+        original_wait_for = asyncio.wait_for
 
         async def create_process(*_args: str, **_kwargs: Any) -> _FakeProcess:
             return process
 
-        async def expire(awaitable: Any, *, timeout: float) -> tuple[bytes, bytes]:
-            assert timeout == 90
-            awaitable.close()
-            raise TimeoutError
+        async def expire(awaitable: Any, *, timeout: float) -> Any:
+            if timeout == 90:
+                awaitable.close()
+                raise TimeoutError
+            return await original_wait_for(awaitable, timeout=timeout)
 
         monkeypatch.setattr(external_runtime.asyncio, "create_subprocess_exec", create_process)
         monkeypatch.setattr(external_runtime.asyncio, "wait_for", expire)
@@ -244,6 +271,43 @@ class TestClaudeCodeDriver:
             )
 
         assert process.returncode == -1
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+        assert transcript["status"] == "failed"
+
+    async def test_timeout_kills_process_that_ignores_terminate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        process = _SignalIgnoringProcess()
+        original_wait_for = asyncio.wait_for
+
+        async def create_process(*_args: str, **_kwargs: Any) -> _SignalIgnoringProcess:
+            return process
+
+        async def expire_or_wait(awaitable: Any, *, timeout: float) -> Any:
+            if timeout == 90:
+                awaitable.close()
+                raise TimeoutError
+            if process.terminated and not process.killed:
+                awaitable.close()
+                raise TimeoutError
+            return await original_wait_for(awaitable, timeout=timeout)
+
+        monkeypatch.setattr(external_runtime.asyncio, "create_subprocess_exec", create_process)
+        monkeypatch.setattr(external_runtime.asyncio, "wait_for", expire_or_wait)
+        transcript_path = tmp_path / "session-A.inference.json"
+
+        with pytest.raises(ExternalRuntimeError, match="90-second runtime limit"):
+            await ClaudeCodeDriver(_profile()).run(
+                "Inspect the inbox.",
+                "http://127.0.0.1:8765/mcp/",
+                transcript_path,
+            )
+
+        assert process.terminated is True
+        assert process.killed is True
+        assert process.returncode == -9
         transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
         assert transcript["status"] == "failed"
 

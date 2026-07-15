@@ -28,6 +28,7 @@ _DEFAULT_TIMEOUT_SECONDS = 300
 _MIN_TIMEOUT_SECONDS = 30
 _MAX_TIMEOUT_SECONDS = 1800
 _VERSION_TIMEOUT_SECONDS = 10.0
+_PROCESS_TERMINATE_GRACE_SECONDS = 5.0
 _MIN_ALWAYS_LOAD_VERSION = (2, 1, 121)
 _MODEL_ALIASES = frozenset({"default", "fable", "haiku", "opus", "sonnet"})
 _SECRET_METADATA_KEYS = frozenset(
@@ -481,7 +482,11 @@ async def _stop_process(process: asyncio.subprocess.Process | None) -> None:
     if process is None or process.returncode is not None:
         return
     process.terminate()
-    await process.wait()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+    except TimeoutError:
+        process.kill()
+        await asyncio.wait_for(process.wait(), timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
