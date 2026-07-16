@@ -1,17 +1,9 @@
-"""Provider-agnostic LLM interaction protocol and data models.
-
-Defines the ProviderClient protocol and normalized data structures used by
-driven inference. No provider-specific imports belong here.
-"""
+"""Provider-agnostic LLM interaction protocol and data models."""
 
 from __future__ import annotations
 
-import json
-import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
-
-logger = logging.getLogger(__name__)
 
 
 class ProviderError(Exception):
@@ -51,15 +43,25 @@ class NormalizedResponse:
         tool_calls: List of tool invocations (empty if none).
         content: Full text content from the model (empty string if none).
         finish_reason: Provider finish reason (stop, tool_calls, length, etc.).
-        raw_response: The original provider response object for evidence.
-        model: The model string that was called.
+        raw_response: Sanitized bounded provider response evidence.
+        requested_model: Exact model identity requested by CTPF.
+        provider_reported_model: Untrusted identity claimed by the provider.
+        artifact_proven_model: Independently proven deployment identity, when available.
+        transport_evidence: Sanitized destination and transport observations.
     """
 
     tool_calls: list[ToolCall] = field(default_factory=list)
     content: str = ""
     finish_reason: str | None = None
-    raw_response: Any = None
-    model: str = ""
+    raw_response: dict[str, Any] | None = None
+    requested_model: str = ""
+    provider_reported_model: str | None = None
+    artifact_proven_model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_microusd: int | None = None
+    transport_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 class ProviderClient(Protocol):
@@ -72,80 +74,3 @@ class ProviderClient(Protocol):
         tools: list[ToolSpec],
         max_tokens: int = 1024,
     ) -> NormalizedResponse: ...
-
-
-def parse_model_string(model: str) -> tuple[str, str]:
-    """Parse 'provider/model-id' into (provider, model_id).
-
-    Bare strings (no slash) fall back to ('anthropic', model).
-
-    Args:
-        model: Model string, optionally prefixed with provider.
-
-    Returns:
-        Tuple of (provider, model_id).
-    """
-    if "/" in model:
-        provider, _, model_id = model.partition("/")
-        if not provider or not model_id:
-            raise ValueError(
-                f"Invalid model string {model!r}: both provider and model-id "
-                "must be non-empty. Expected format: provider/model-id"
-            )
-        return provider, model_id
-    return "anthropic", model
-
-
-def serialize_evidence(response: NormalizedResponse) -> str:
-    """Serialize the raw provider response for evidence storage.
-
-    Returns JSON string. Handles litellm ModelResponse objects,
-    dicts, and arbitrary objects via best-effort serialization.
-
-    Args:
-        response: Normalized response containing raw_response.
-
-    Returns:
-        JSON string of the serialized evidence.
-    """
-    raw = response.raw_response
-    if raw is None:
-        return json.dumps(
-            {
-                "content": response.content,
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in response.tool_calls
-                ],
-            },
-            indent=2,
-            default=str,
-        )
-
-    if isinstance(raw, dict):
-        return json.dumps(raw, indent=2, default=str)
-
-    if hasattr(raw, "model_dump"):
-        return json.dumps(raw.model_dump(), indent=2, default=str)
-
-    try:
-        return json.dumps(vars(raw), indent=2, default=str)
-    except TypeError:
-        return json.dumps({"raw": str(raw)}, indent=2, default=str)
-
-
-def get_provider_client(model: str) -> ProviderClient:
-    """Factory: return a ProviderClient for the given model string.
-
-    Parses the provider prefix and returns the appropriate client.
-    For MVP, always returns the litellm client (which handles all providers).
-
-    Args:
-        model: Model string (e.g. 'anthropic/claude-sonnet-4-20250514').
-
-    Returns:
-        A ProviderClient instance.
-    """
-    from ctpf.core.llm_litellm import LiteLLMClient
-
-    return LiteLLMClient()

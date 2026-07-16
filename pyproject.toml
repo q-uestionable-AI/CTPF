@@ -27,7 +27,8 @@ dependencies = [
     "pyyaml>=6.0",
     "uvicorn[standard]>=0.34",
     "mcp>=1.26,<2",
-    "litellm>=1.80,<1.92,!=1.82.7,!=1.82.8",
+    "httpx>=0.28.1,<0.29",
+    "httpcore>=1.0.9,<1.1",
     "keyring>=25.0",
     "textual>=0.80",
 ]

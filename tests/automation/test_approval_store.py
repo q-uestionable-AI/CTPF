@@ -20,6 +20,7 @@ from ctpf.automation.contracts import (
     AuthorizationTier,
     AutomationRunState,
     BillingClass,
+    DataEgressClass,
     DecisionKind,
     ExperimentMode,
     ExperimentRequest,
@@ -51,33 +52,30 @@ from ctpf.automation.store import (
     save_policy,
     transition_run_state,
 )
+from ctpf.automation.targets import target_identity_from_profile
 from ctpf.core.db import get_connection
 
 POLICY_ID = "a" * 32
 TARGET_ID = "b" * 32
 SCENARIO_FINGERPRINT = "c" * 64
-TARGET_BEHAVIOR = {
-    "credential_alias": "test-key",
-    "driver": "openai-compatible",
-    "driver_source_hash": hashlib.sha256(Path(driven_inference.__file__).read_bytes()).hexdigest(),
-    "endpoint": "http://127.0.0.1:11434/v1",
-    "generation_parameters": {
-        "reasoning_effort": None,
-        "seed": None,
-        "temperature": "0",
-    },
-    "max_provider_rounds": 12,
-    "max_tokens": 256,
-    "model": "test-model",
-    "target_id": TARGET_ID,
-    "target_type": "inference",
-}
-TARGET_FINGERPRINT = sha256_digest(TARGET_BEHAVIOR)
+TARGET_IDENTITY = target_identity_from_profile(
+    driven_inference.OpenAICompatibleTargetProfile(
+        target_id=TARGET_ID,
+        name="test target",
+        endpoint="http://127.0.0.1:11434/v1",
+        model="test-model",
+        credential_name="test-key",
+        max_tokens=256,
+        max_input_tokens=256,
+    )
+)
+TARGET_BEHAVIOR = TARGET_IDENTITY.behavior
+TARGET_FINGERPRINT = TARGET_IDENTITY.fingerprint
 NOW = datetime.datetime(2026, 7, 16, 12, 0, tzinfo=datetime.UTC)
 
 
 def _limits() -> ResourceLimits:
-    return ResourceLimits(120, 12, 3_072, 12, 1, 0)
+    return ResourceLimits(1_080, 12, 3_072, 3_072, 36, 1, 0)
 
 
 def _spec(*, purpose: str = "Exercise the packaged synthetic scenario.") -> RunSpec:
@@ -124,6 +122,9 @@ def _policy() -> PolicyDocument:
                 NetworkClass.LOOPBACK,
                 BillingClass.UNMETERED,
                 None,
+                DataEgressClass.LOCAL_ONLY,
+                False,
+                False,
             ),
         ),
         output_roots=(OutputRootPolicy("research-evidence", "C:/research/evidence"),),
@@ -138,7 +139,7 @@ def _decision(spec: RunSpec, policy: PolicyDocument) -> PolicyDecision:
         "policy_match",
         sha256_digest(spec.to_payload()),
         sha256_digest(policy.to_payload()),
-        ResourceLimits(1, 12, 3_072, 1, 1, 0),
+        ResourceLimits(1, 12, 3_072, 3_072, 1, 1, 0),
     )
 
 

@@ -19,7 +19,17 @@ POLICY_ID = "a" * 32
 TARGET_ID = "b" * 32
 SCENARIO_FINGERPRINT = "c" * 64
 TARGET_BEHAVIOR = {
+    "authority_contract_version": 1,
+    "billing": {
+        "billing_class": "unmetered",
+        "request_cost_ceiling_microusd": None,
+        "residual_cost_acknowledged": False,
+    },
     "credential_alias": "test-key",
+    "data_egress": {
+        "data_egress_class": "local_only",
+        "retention_acknowledged": False,
+    },
     "driver": "openai-compatible",
     "driver_source_hash": "d" * 64,
     "endpoint": "http://127.0.0.1:11434/v1",
@@ -37,9 +47,10 @@ TARGET_BEHAVIOR = {
 TARGET_FINGERPRINT = sha256_digest(TARGET_BEHAVIOR)
 
 
-def _limits() -> dict[str, int]:
+def _limits() -> dict[str, int | None]:
     return {
         "cost_limit_microusd": 0,
+        "input_tokens_reserved": 512,
         "output_tokens_reserved": 512,
         "provider_requests": 2,
         "runtime_processes": 1,
@@ -70,7 +81,7 @@ def _run_payload() -> dict[str, object]:
         "purpose": "Test the installed synthetic scenario.",
         "requested_tier": 1,
         "requester": {"kind": "agent", "name": "test-agent", "version": "1"},
-        "schema_version": 1,
+        "schema_version": 2,
     }
 
 
@@ -98,14 +109,17 @@ def _policy_payload() -> dict[str, object]:
                 "scenario": "pattern2",
             }
         ],
-        "schema_version": 2,
+        "schema_version": 3,
         "standing_tiers": [1],
         "targets": [
             {
                 "behavior": TARGET_BEHAVIOR,
                 "billing_class": "unmetered",
+                "data_egress_class": "local_only",
                 "network_class": "loopback",
                 "request_cost_ceiling_microusd": None,
+                "residual_cost_acknowledged": False,
+                "retention_acknowledged": False,
                 "target_fingerprint": TARGET_FINGERPRINT,
                 "target_id": TARGET_ID,
                 "target_type": "inference",
@@ -202,7 +216,14 @@ def test_policy_round_trip_rejects_invalid_interval_and_cost_classification() ->
     payload = _policy_payload()
     targets = payload["targets"]
     assert isinstance(targets, list) and isinstance(targets[0], dict)
-    targets[0]["billing_class"] = "metered"
+    target = targets[0]
+    behavior = dict(target["behavior"])
+    billing = dict(behavior["billing"])
+    billing["billing_class"] = "metered"
+    behavior["billing"] = billing
+    target["behavior"] = behavior
+    target["target_fingerprint"] = sha256_digest(behavior)
+    target["billing_class"] = "metered"
     with pytest.raises(ContractError, match="require request_cost"):
         PolicyDocument.from_payload(payload)
 

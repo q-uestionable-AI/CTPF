@@ -5,21 +5,25 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, TypeVar
 
+from ctpf.automation.contracts import BillingClass, DataEgressClass
 from ctpf.core.config import get_keyring_credential
 from ctpf.core.db import get_connection, get_target
+from ctpf.core.hosted_inference import MAX_INPUT_TOKENS, CanonicalEndpoint, canonicalize_endpoint
 from ctpf.core.llm import NormalizedResponse, ProviderClient, ToolCall, ToolSpec
 from ctpf.core.models import Target
+from ctpf.core.redaction import redact_text, sanitize_evidence
 from ctpf.mcp.connection import MCPConnection
 from ctpf.services.db_service import resolve_partial_id
 
 _DRIVER_NAME = "openai-compatible"
 _DEFAULT_MAX_TOKENS = 1024
 DEFAULT_MAX_ROUNDS = 12
+MAX_TOOL_CALLS_PER_SESSION = 12
 _MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 _REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+_AuthorityEnumT = TypeVar("_AuthorityEnumT", BillingClass, DataEgressClass)
 
 
 class DrivenInferenceError(RuntimeError):
@@ -40,6 +44,12 @@ class OpenAICompatibleTargetProfile:
         temperature: Optional fixed sampling temperature.
         seed: Optional fixed provider seed.
         reasoning_effort: Optional fixed provider reasoning effort.
+        max_input_tokens: Conservative input-token reservation per provider request.
+        billing_class: Human-declared billing basis.
+        request_cost_ceiling_microusd: Maximum approved cost per provider request.
+        data_egress_class: Approved class of data sent to the endpoint.
+        retention_acknowledged: Operator acknowledgement of provider retention/privacy.
+        residual_cost_acknowledged: Operator acknowledgement of provider-side residual cost.
     """
 
     target_id: str
@@ -51,11 +61,12 @@ class OpenAICompatibleTargetProfile:
     temperature: float | None = None
     seed: int | None = None
     reasoning_effort: str | None = None
-
-    @property
-    def litellm_model(self) -> str:
-        """Return the LiteLLM routing form for an OpenAI-compatible model."""
-        return f"openai/{self.model}"
+    max_input_tokens: int = MAX_INPUT_TOKENS
+    billing_class: BillingClass = BillingClass.UNMETERED
+    request_cost_ceiling_microusd: int | None = None
+    data_egress_class: DataEgressClass = DataEgressClass.LOCAL_ONLY
+    retention_acknowledged: bool = False
+    residual_cost_acknowledged: bool = False
 
     def generation_parameters(self) -> dict[str, int | float | str]:
         """Return supported fixed generation parameters for provider calls."""
@@ -78,7 +89,13 @@ class OpenAICompatibleTargetProfile:
             "model": self.model,
             "credential_name": self.credential_name,
             "max_tokens": self.max_tokens,
+            "max_input_tokens": self.max_input_tokens,
             "generation_parameters": self.generation_parameters(),
+            "billing_class": self.billing_class.value,
+            "request_cost_ceiling_microusd": self.request_cost_ceiling_microusd,
+            "data_egress_class": self.data_egress_class.value,
+            "retention_acknowledged": self.retention_acknowledged,
+            "residual_cost_acknowledged": self.residual_cost_acknowledged,
         }
 
 
@@ -126,34 +143,40 @@ def load_openai_target_profile(
 def _profile_from_target(target: Target) -> OpenAICompatibleTargetProfile:
     if target.type != "inference":
         raise DrivenInferenceError("driven inference requires a target with type 'inference'")
-    endpoint = _validated_endpoint(target.uri)
+    endpoint = _canonical_endpoint(target.uri)
     metadata = target.metadata
     if not isinstance(metadata, dict):
         raise DrivenInferenceError("inference target metadata must be a JSON object")
     driver = _required_string(metadata, "driver")
     if driver != _DRIVER_NAME:
         raise DrivenInferenceError(f"unsupported inference driver: {driver!r}")
+    authority = _authority_metadata(metadata, endpoint)
     return OpenAICompatibleTargetProfile(
         target_id=target.id,
         name=target.name,
-        endpoint=endpoint,
+        endpoint=endpoint.normalized_url,
         model=_required_string(metadata, "model"),
         credential_name=_required_string(metadata, "credential"),
         max_tokens=_max_tokens(metadata),
         temperature=_optional_float(metadata, "temperature", minimum=0.0, maximum=2.0),
         seed=_optional_int(metadata, "seed", None),
         reasoning_effort=_optional_choice(metadata, "reasoning_effort", _REASONING_EFFORTS),
+        max_input_tokens=_max_input_tokens(metadata),
+        billing_class=authority[0],
+        request_cost_ceiling_microusd=authority[1],
+        data_egress_class=authority[2],
+        retention_acknowledged=authority[3],
+        residual_cost_acknowledged=authority[4],
     )
 
 
-def _validated_endpoint(raw: str | None) -> str:
+def _canonical_endpoint(raw: str | None) -> CanonicalEndpoint:
     if not isinstance(raw, str) or not raw.strip():
         raise DrivenInferenceError("inference target URI must contain an API base URL")
-    endpoint = raw.strip().rstrip("/")
-    parsed = urlparse(endpoint)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise DrivenInferenceError("inference target URI must be an absolute HTTP(S) URL")
-    return endpoint
+    try:
+        return canonicalize_endpoint(raw.strip().rstrip("/"))
+    except ValueError as exc:
+        raise DrivenInferenceError(str(exc)) from exc
 
 
 def _required_string(metadata: dict[str, Any], key: str) -> str:
@@ -187,6 +210,99 @@ def _max_tokens(metadata: dict[str, Any]) -> int:
     if parsed is None:
         raise DrivenInferenceError("inference target 'max_tokens' could not be resolved")
     return parsed
+
+
+def _max_input_tokens(metadata: dict[str, Any]) -> int:
+    parsed = _optional_int(metadata, "max_input_tokens", MAX_INPUT_TOKENS, minimum=1)
+    if parsed is None:
+        raise DrivenInferenceError("inference target 'max_input_tokens' could not be resolved")
+    return parsed
+
+
+def _authority_metadata(
+    metadata: dict[str, Any],
+    endpoint: CanonicalEndpoint,
+) -> tuple[BillingClass, int | None, DataEgressClass, bool, bool]:
+    if endpoint.network_class == "loopback":
+        return _local_authority_metadata(metadata)
+    billing = _enum_metadata(metadata, "billing_class", BillingClass)
+    if billing == BillingClass.EXTERNAL_RUNTIME:
+        raise DrivenInferenceError("inference target billing_class cannot be external_runtime")
+    ceiling = _cost_ceiling(metadata, billing)
+    egress = _enum_metadata(metadata, "data_egress_class", DataEgressClass)
+    if egress != DataEgressClass.PACKAGED_SYNTHETIC_REMOTE:
+        raise DrivenInferenceError(
+            "public inference targets require packaged_synthetic_remote data egress"
+        )
+    retention = _required_bool(metadata, "retention_acknowledged")
+    residual = _required_bool(metadata, "residual_cost_acknowledged")
+    if not retention or not residual:
+        raise DrivenInferenceError(
+            "public inference targets require retention and residual-cost acknowledgements"
+        )
+    return billing, ceiling, egress, retention, residual
+
+
+def _local_authority_metadata(
+    metadata: dict[str, Any],
+) -> tuple[BillingClass, int | None, DataEgressClass, bool, bool]:
+    billing = _optional_enum_metadata(
+        metadata,
+        "billing_class",
+        BillingClass,
+        BillingClass.UNMETERED,
+    )
+    egress = _optional_enum_metadata(
+        metadata,
+        "data_egress_class",
+        DataEgressClass,
+        DataEgressClass.LOCAL_ONLY,
+    )
+    if billing != BillingClass.UNMETERED or egress != DataEgressClass.LOCAL_ONLY:
+        raise DrivenInferenceError("loopback inference targets must be unmetered and local_only")
+    if metadata.get("request_cost_ceiling_microusd") not in {None, ""}:
+        raise DrivenInferenceError("loopback inference targets must not declare request cost")
+    return billing, None, egress, False, False
+
+
+def _cost_ceiling(metadata: dict[str, Any], billing: BillingClass) -> int | None:
+    value = _optional_int(metadata, "request_cost_ceiling_microusd", None, minimum=0)
+    if billing == BillingClass.METERED and value is None:
+        raise DrivenInferenceError("metered inference targets require a request cost ceiling")
+    if billing != BillingClass.METERED and value is not None:
+        raise DrivenInferenceError("only metered inference targets may declare request cost")
+    return value
+
+
+def _enum_metadata(
+    metadata: dict[str, Any],
+    key: str,
+    enum_type: type[_AuthorityEnumT],
+) -> _AuthorityEnumT:
+    value = _required_string(metadata, key)
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        choices = ", ".join(item.value for item in enum_type)
+        raise DrivenInferenceError(f"inference target {key!r} must be one of: {choices}") from exc
+
+
+def _optional_enum_metadata(
+    metadata: dict[str, Any],
+    key: str,
+    enum_type: type[_AuthorityEnumT],
+    default: _AuthorityEnumT,
+) -> _AuthorityEnumT:
+    if metadata.get(key) in {None, ""}:
+        return default
+    return _enum_metadata(metadata, key, enum_type)
+
+
+def _required_bool(metadata: dict[str, Any], key: str) -> bool:
+    value = metadata.get(key)
+    if not isinstance(value, bool):
+        raise DrivenInferenceError(f"inference target {key!r} must be a boolean")
+    return value
 
 
 def _optional_choice(
@@ -291,11 +407,12 @@ class OpenAICompatibleDriver:
             raise DrivenInferenceError(
                 f"OS keyring has no credential named {self._profile.credential_name!r}"
             )
-        from ctpf.core.llm_litellm import LiteLLMClient
+        from ctpf.core.llm_openai import OpenAICompatibleClient
 
-        client = LiteLLMClient(
-            api_base=self._profile.endpoint,
+        client = OpenAICompatibleClient(
+            endpoint=self._profile.endpoint,
             api_key=credential,
+            requested_model=self._profile.model,
             generation_parameters=self._profile.generation_parameters(),
         )
         return client, credential
@@ -341,7 +458,7 @@ class OpenAICompatibleDriver:
             transcript["rounds"].append(record)
             _write_json(transcript_path, transcript)
             response = await client.complete(
-                self._profile.litellm_model,
+                self._profile.model,
                 messages,
                 tools,
                 max_tokens=self._profile.max_tokens,
@@ -355,6 +472,8 @@ class OpenAICompatibleDriver:
                     tool_call_count,
                     transcript_path,
                 )
+            if tool_call_count + len(response.tool_calls) > MAX_TOOL_CALLS_PER_SESSION:
+                raise DrivenInferenceError("model exceeded the per-session tool-call limit")
             results = await _execute_tool_calls(session, response.tool_calls, messages)
             tool_call_count += len(results)
             record["tool_results"] = results
@@ -369,7 +488,7 @@ class OpenAICompatibleDriver:
         return {
             "endpoint": self._profile.endpoint,
             "model": self._profile.model,
-            "messages": _json_value(messages),
+            "messages": _evidence_value(messages),
             "tools": [_openai_tool(tool) for tool in tools],
             "max_tokens": self._profile.max_tokens,
             **self._profile.generation_parameters(),
@@ -408,7 +527,7 @@ def _tool_specs(listed: Any) -> tuple[list[ToolSpec], list[dict[str, Any]]]:
         dumped = raw.model_dump(by_alias=True, exclude_none=True)
         if not isinstance(dumped, dict):
             raise DrivenInferenceError("proxied MCP tool schema did not serialize to an object")
-        schemas.append(_json_value(dumped))
+        schemas.append(_evidence_value(dumped))
     return specs, schemas
 
 
@@ -428,12 +547,13 @@ async def _execute_tool_calls(
         if not isinstance(dumped, dict):
             raise DrivenInferenceError("MCP tool result did not serialize to an object")
         result_payload = _json_value(dumped)
+        evidence_result = _evidence_value(result_payload)
         results.append(
             {
                 "tool_call_id": call.id,
                 "name": call.name,
-                "arguments": _json_value(call.arguments),
-                "result": result_payload,
+                "arguments": _evidence_value(call.arguments),
+                "result": evidence_result,
             }
         )
         messages.append(
@@ -469,33 +589,54 @@ def _openai_tool(tool: ToolSpec) -> dict[str, Any]:
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": _json_value(tool.parameters),
+            "parameters": _evidence_value(tool.parameters),
         },
     }
 
 
 def _response_payload(response: NormalizedResponse) -> dict[str, Any]:
     return {
-        "model": response.model,
+        "requested_model": response.requested_model,
+        "provider_reported_model": response.provider_reported_model,
+        "artifact_proven_model": response.artifact_proven_model,
         "finish_reason": response.finish_reason,
         "content": response.content,
+        "usage": {
+            "input_tokens": response.input_tokens,
+            "output_tokens": response.output_tokens,
+            "total_tokens": response.total_tokens,
+            "cost_microusd": response.cost_microusd,
+        },
         "tool_calls": [
-            {"id": call.id, "name": call.name, "arguments": _json_value(call.arguments)}
+            {"id": call.id, "name": call.name, "arguments": _evidence_value(call.arguments)}
             for call in response.tool_calls
         ],
-        "raw": _json_value(response.raw_response),
+        "raw": _evidence_value(response.raw_response),
+        "transport": _evidence_value(response.transport_evidence),
     }
 
 
-def _error_payload(exc: BaseException, secret: str | None) -> dict[str, str]:
-    message = str(exc)
-    if secret:
-        message = message.replace(secret, "<redacted>")
-    return {"type": type(exc).__name__, "message": message}
+def _error_payload(exc: BaseException, secret: str | None) -> dict[str, Any]:
+    secrets = (secret,) if secret else ()
+    payload: dict[str, Any] = {
+        "type": type(exc).__name__,
+        "message": redact_text(str(exc), secrets),
+    }
+    evidence = getattr(exc, "evidence", None)
+    if evidence is not None:
+        payload["evidence"] = sanitize_evidence(evidence, secrets)
+    return payload
 
 
 def _json_value(value: Any) -> Any:
-    return json.loads(json.dumps(value, default=str))
+    try:
+        return json.loads(json.dumps(value))
+    except (TypeError, ValueError) as exc:
+        raise DrivenInferenceError("external value was not JSON-compatible") from exc
+
+
+def _evidence_value(value: Any) -> Any:
+    return sanitize_evidence(value)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
