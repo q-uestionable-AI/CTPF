@@ -182,7 +182,13 @@ async def system_resolver(host: str, port: int) -> Sequence[str]:
     """Resolve all TCP A/AAAA candidates using the platform resolver."""
     loop = asyncio.get_running_loop()
     records = await loop.getaddrinfo(host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
-    return tuple(record[4][0] for record in records)
+    addresses: list[str] = []
+    for record in records:
+        raw_address = record[4][0]
+        if not isinstance(raw_address, str):
+            raise TypeError("platform resolver returned an invalid address")
+        addresses.append(raw_address)
+    return tuple(addresses)
 
 
 async def resolve_endpoint(

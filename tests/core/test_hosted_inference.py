@@ -22,6 +22,7 @@ from ctpf.core.hosted_inference import (
     SocketOption,
     canonicalize_endpoint,
     resolve_endpoint,
+    system_resolver,
 )
 
 _PUBLIC_ADDRESS = "93.184.216.34"
@@ -111,6 +112,22 @@ async def test_resolution_rejects_non_global_and_mixed_address_sets() -> None:
 
     with pytest.raises(ValueError, match="non-global"):
         await resolve_endpoint(endpoint, mixed)
+
+
+async def test_system_resolver_rejects_non_text_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MalformedResolverLoop:
+        async def getaddrinfo(self, *_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+            return [(0, 0, 0, "", (123, 443))]
+
+    def malformed_resolver_loop() -> _MalformedResolverLoop:
+        return _MalformedResolverLoop()
+
+    monkeypatch.setattr(asyncio, "get_running_loop", malformed_resolver_loop)
+
+    with pytest.raises(TypeError, match="platform resolver returned an invalid address"):
+        await system_resolver("models.example.test", 443)
 
 
 class _FakeStream(httpcore.AsyncNetworkStream):
