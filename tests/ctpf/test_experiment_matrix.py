@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ctpf import experiment
+from ctpf.automation.contracts import DataEgressClass
 from ctpf.cli import app as root_app
 from ctpf.driven_inference import OpenAICompatibleTargetProfile
 from ctpf.kernel import EvidenceBundle, PromotionResult, TrustTransition
@@ -28,6 +29,10 @@ def _profile(target_id: str, model: str) -> OpenAICompatibleTargetProfile:
         max_tokens=512,
         temperature=0.0,
         seed=0,
+        max_input_tokens=1_024,
+        data_egress_class=DataEgressClass.PACKAGED_SYNTHETIC_REMOTE,
+        retention_acknowledged=True,
+        residual_cost_acknowledged=True,
     )
 
 

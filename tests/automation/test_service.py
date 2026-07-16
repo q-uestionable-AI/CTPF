@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import hashlib
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -16,11 +15,11 @@ import pytest
 from ctpf import driven_inference
 from ctpf.automation import approval
 from ctpf.automation import service as automation_service
-from ctpf.automation.canonical import sha256_digest
 from ctpf.automation.contracts import (
     AuthorizationTier,
     AutomationRunState,
     BillingClass,
+    DataEgressClass,
     DecisionKind,
     ExperimentMode,
     ExperimentRequest,
@@ -37,7 +36,7 @@ from ctpf.automation.contracts import (
 )
 from ctpf.automation.envelope import ControlError
 from ctpf.automation.service import AutomationService, ValidationResult
-from ctpf.automation.targets import scenario_capability
+from ctpf.automation.targets import scenario_capability, target_identity_from_profile
 from ctpf.core.db import get_readonly_connection
 
 POLICY_ID = "a" * 32
@@ -57,7 +56,7 @@ def fake_keyring(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def _limits(*, cost: int = 0) -> ResourceLimits:
-    return ResourceLimits(300, 36, 9_216, 3, 4, cost)
+    return ResourceLimits(3_240, 36, 9_216, 9_216, 36, 4, cost)
 
 
 def _target(network: NetworkClass) -> TargetPolicy:
@@ -66,32 +65,35 @@ def _target(network: NetworkClass) -> TargetPolicy:
         if network == NetworkClass.LOOPBACK
         else "https://models.example.test/v1"
     )
-    behavior = {
-        "credential_alias": "test-key",
-        "driver": "openai-compatible",
-        "driver_source_hash": hashlib.sha256(
-            Path(driven_inference.__file__).read_bytes()
-        ).hexdigest(),
-        "endpoint": endpoint,
-        "generation_parameters": {
-            "reasoning_effort": None,
-            "seed": None,
-            "temperature": "0",
-        },
-        "max_provider_rounds": 12,
-        "max_tokens": 256,
-        "model": "test-model",
-        "target_id": TARGET_ID,
-        "target_type": "inference",
-    }
+    remote = network == NetworkClass.HTTPS_PUBLIC
+    identity = target_identity_from_profile(
+        driven_inference.OpenAICompatibleTargetProfile(
+            target_id=TARGET_ID,
+            name="test target",
+            endpoint=endpoint,
+            model="test-model",
+            credential_name="test-key",
+            max_tokens=256,
+            temperature=0.0,
+            max_input_tokens=256,
+            data_egress_class=(
+                DataEgressClass.PACKAGED_SYNTHETIC_REMOTE if remote else DataEgressClass.LOCAL_ONLY
+            ),
+            retention_acknowledged=remote,
+            residual_cost_acknowledged=remote,
+        )
+    )
     return TargetPolicy(
         TARGET_ID,
-        sha256_digest(behavior),
+        identity.fingerprint,
         "inference",
-        behavior,
+        identity.behavior,
         network,
         BillingClass.UNMETERED,
         None,
+        (DataEgressClass.PACKAGED_SYNTHETIC_REMOTE if remote else DataEgressClass.LOCAL_ONLY),
+        remote,
+        remote,
     )
 
 

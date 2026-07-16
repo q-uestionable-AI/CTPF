@@ -8,6 +8,7 @@ from dataclasses import replace
 from ctpf.automation.contracts import (
     AuthorizationTier,
     BillingClass,
+    DataEgressClass,
     DecisionKind,
     ExperimentMode,
     ExperimentRequest,
@@ -34,12 +35,13 @@ TARGET_FINGERPRINT_TWO = "f" * 64
 NOW = datetime.datetime(2026, 7, 16, 12, 0, tzinfo=datetime.UTC)
 
 
-def _resources(**overrides: int) -> ResourceLimits:
-    values = {
-        "wall_clock_seconds": 300,
+def _resources(**overrides: int | None) -> ResourceLimits:
+    values: dict[str, int | None] = {
+        "wall_clock_seconds": 3_240,
         "provider_requests": 36,
+        "input_tokens_reserved": 9_216,
         "output_tokens_reserved": 9_216,
-        "tool_calls": 3,
+        "tool_calls": 36,
         "runtime_processes": 4,
         "cost_limit_microusd": 0,
     }
@@ -50,7 +52,7 @@ def _resources(**overrides: int) -> ResourceLimits:
 def _capability(**overrides: object) -> ScenarioCapability:
     values: dict[str, object] = {
         "scenario": "pattern2",
-        "contract_version": 1,
+        "contract_version": 2,
         "modes": (ExperimentMode.SINGLE,),
         "conditions": ("baseline", "manipulated", "hardened"),
         "sessions_per_trial": 3,
@@ -73,16 +75,47 @@ def _identity(
     target_type: str = "inference",
     target_id: str = TARGET_ID,
     fingerprint: str = TARGET_FINGERPRINT,
+    billing: BillingClass = BillingClass.UNMETERED,
+    request_cost: int | None = None,
 ) -> TargetIdentity:
+    remote = network != NetworkClass.LOOPBACK
+    egress = (
+        DataEgressClass.EXTERNAL_RUNTIME
+        if network == NetworkClass.EXTERNAL_RUNTIME
+        else (DataEgressClass.PACKAGED_SYNTHETIC_REMOTE if remote else DataEgressClass.LOCAL_ONLY)
+    )
     behavior: dict[str, object] = {
+        "billing": {
+            "billing_class": billing.value,
+            "request_cost_ceiling_microusd": request_cost,
+            "residual_cost_acknowledged": remote,
+        },
+        "data_egress": {
+            "data_egress_class": egress.value,
+            "retention_acknowledged": remote,
+        },
         "driver": "openai-compatible",
-        "max_tokens": 256,
-        "max_provider_rounds": 12,
+        "limits": {
+            "max_input_tokens": 256,
+            "max_output_tokens": 256,
+            "max_provider_rounds": 12,
+            "max_tool_calls_per_session": 12,
+        },
         "target_id": target_id,
         "target_type": target_type,
+        "transport": {"max_attempts": 1, "deadlines_seconds": {"overall": 90}},
     }
     if target_type == "agent-runtime":
         behavior = {
+            "billing": {
+                "billing_class": BillingClass.EXTERNAL_RUNTIME.value,
+                "request_cost_ceiling_microusd": None,
+                "residual_cost_acknowledged": True,
+            },
+            "data_egress": {
+                "data_egress_class": DataEgressClass.EXTERNAL_RUNTIME.value,
+                "retention_acknowledged": True,
+            },
             "driver": "claude-code-cli",
             "identity_probe_processes": 1,
             "identity_probe_timeout_seconds": 10,
@@ -106,6 +139,8 @@ def _target_policy(
         target_type=target_type,
         target_id=target_id,
         fingerprint=fingerprint,
+        billing=billing,
+        request_cost=request_cost,
     )
     return TargetPolicy(
         target_id,
@@ -115,6 +150,17 @@ def _target_policy(
         network,
         billing,
         request_cost,
+        (
+            DataEgressClass.EXTERNAL_RUNTIME
+            if network == NetworkClass.EXTERNAL_RUNTIME
+            else (
+                DataEgressClass.PACKAGED_SYNTHETIC_REMOTE
+                if network == NetworkClass.HTTPS_PUBLIC
+                else DataEgressClass.LOCAL_ONLY
+            )
+        ),
+        network != NetworkClass.LOOPBACK,
+        network != NetworkClass.LOOPBACK,
     )
 
 
@@ -219,7 +265,8 @@ def test_loopback_unmetered_scenario_is_allowed_by_standing_policy() -> None:
     assert decision.reason_code == "policy_match"
     assert decision.minimum_reservations.provider_requests == 36
     assert decision.minimum_reservations.output_tokens_reserved == 9_216
-    assert decision.minimum_reservations.tool_calls == 3
+    assert decision.minimum_reservations.input_tokens_reserved == 9_216
+    assert decision.minimum_reservations.tool_calls == 36
 
 
 def test_remote_metered_target_requires_tier_two_and_reserves_cost() -> None:
@@ -235,7 +282,11 @@ def test_remote_metered_target_requires_tier_two_and_reserves_cost() -> None:
     )
     limits = _resources(cost_limit_microusd=900_000)
     spec = _spec(requested_tier=AuthorizationTier.BOUNDED_REMOTE, limits=limits)
-    identity = _identity(network=NetworkClass.HTTPS_PUBLIC)
+    identity = _identity(
+        network=NetworkClass.HTTPS_PUBLIC,
+        billing=BillingClass.METERED,
+        request_cost=25_000,
+    )
 
     decision = evaluate_policy(spec, policy, _capability(), (identity,), now=NOW)
 
@@ -302,27 +353,38 @@ def test_external_runtime_is_per_run_and_emits_cost_warning() -> None:
         network=NetworkClass.EXTERNAL_RUNTIME,
         billing=BillingClass.EXTERNAL_RUNTIME,
     )
-    spec = _spec(requested_tier=AuthorizationTier.BOUNDED_REMOTE)
+    runtime_resources = _resources(cost_limit_microusd=None)
+    spec = _spec(
+        requested_tier=AuthorizationTier.BOUNDED_REMOTE,
+        limits=runtime_resources,
+    )
     identity = _identity(
         network=NetworkClass.EXTERNAL_RUNTIME,
         target_type="agent-runtime",
     )
 
     decision = evaluate_policy(
-        spec, _policy(target=target_policy), _capability(), (identity,), now=NOW
+        spec,
+        _policy(target=target_policy, resources=runtime_resources),
+        _capability(),
+        (identity,),
+        now=NOW,
     )
 
     assert decision.kind == DecisionKind.APPROVAL_REQUIRED
     assert decision.minimum_reservations.runtime_processes == 4
     assert decision.minimum_reservations.wall_clock_seconds == 280
-    assert decision.warnings == ("external runtime cost is not measured by CTPF",)
+    assert decision.minimum_reservations.cost_limit_microusd is None
+    assert decision.warnings == (
+        "external runtime residual cost is acknowledged but not measurable",
+    )
 
     under_reserved = evaluate_policy(
         _spec(
             requested_tier=AuthorizationTier.BOUNDED_REMOTE,
-            limits=_resources(wall_clock_seconds=279),
+            limits=_resources(wall_clock_seconds=279, cost_limit_microusd=None),
         ),
-        _policy(target=target_policy),
+        _policy(target=target_policy, resources=runtime_resources),
         _capability(),
         (identity,),
         now=NOW,
@@ -352,7 +414,7 @@ def test_external_runtime_identity_probe_reservations_fail_closed() -> None:
         invalid = replace(identity, behavior=behavior)
         decision = evaluate_policy(
             _spec(requested_tier=AuthorizationTier.BOUNDED_REMOTE),
-            _policy(target=target_policy),
+            _policy(target=replace(target_policy, behavior=behavior)),
             _capability(),
             (invalid,),
             now=NOW,
@@ -364,9 +426,11 @@ def test_external_runtime_identity_probe_reservations_fail_closed() -> None:
 def test_cascade_matrix_reserves_every_condition_session_for_every_target() -> None:
     """Three cascade trials over two targets reserve all 36 sessions."""
     limits = _resources(
+        wall_clock_seconds=38_880,
         provider_requests=432,
+        input_tokens_reserved=110_592,
         output_tokens_reserved=110_592,
-        tool_calls=36,
+        tool_calls=432,
     )
     spec = _spec(experiment=_matrix_experiment(), limits=limits)
     identities = (
@@ -385,7 +449,7 @@ def test_cascade_matrix_reserves_every_condition_session_for_every_target() -> N
     assert decision.kind == DecisionKind.ALLOWED_STANDING_POLICY
     assert decision.minimum_reservations.provider_requests == 432
     assert decision.minimum_reservations.output_tokens_reserved == 110_592
-    assert decision.minimum_reservations.tool_calls == 36
+    assert decision.minimum_reservations.tool_calls == 432
 
 
 def test_matrix_rejects_external_runtime_before_reservation() -> None:

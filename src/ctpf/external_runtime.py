@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeAlias
 from urllib.parse import urlparse
 
+from ctpf.automation.contracts import BillingClass, DataEgressClass
 from ctpf.core.db import get_connection, get_target
 from ctpf.core.models import Target
 from ctpf.driven_inference import (
@@ -95,6 +96,10 @@ class ClaudeCodeTargetProfile:
     model: str
     runtime_version: str
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
+    billing_class: BillingClass = BillingClass.EXTERNAL_RUNTIME
+    data_egress_class: DataEgressClass = DataEgressClass.EXTERNAL_RUNTIME
+    retention_acknowledged: bool = True
+    residual_cost_acknowledged: bool = True
 
     def evidence_payload(self) -> dict[str, Any]:
         """Return the complete external-runtime pin without credentials."""
@@ -109,6 +114,10 @@ class ClaudeCodeTargetProfile:
             "timeout_seconds": self.timeout_seconds,
             "authentication": "runtime-managed secure login",
             "environment_policy": "minimal non-secret allowlist",
+            "billing_class": self.billing_class.value,
+            "data_egress_class": self.data_egress_class.value,
+            "retention_acknowledged": self.retention_acknowledged,
+            "residual_cost_acknowledged": self.residual_cost_acknowledged,
         }
 
 
@@ -254,6 +263,12 @@ def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
     model = _exact_model(metadata)
     executable, version = _inspect_claude_executable(target.uri)
     _require_always_load_support(version)
+    retention = _required_bool(metadata, "retention_acknowledged")
+    residual = _required_bool(metadata, "residual_cost_acknowledged")
+    if not retention or not residual:
+        raise ExternalRuntimeError(
+            "agent-runtime targets require retention and residual-cost acknowledgements"
+        )
     return ClaudeCodeTargetProfile(
         target_id=target.id,
         name=target.name,
@@ -261,6 +276,8 @@ def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
         model=model,
         runtime_version=version,
         timeout_seconds=_timeout_seconds(metadata),
+        retention_acknowledged=retention,
+        residual_cost_acknowledged=residual,
     )
 
 
@@ -269,6 +286,13 @@ def _required_string(metadata: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ExternalRuntimeError(f"agent-runtime metadata requires non-empty {key!r}")
     return value.strip()
+
+
+def _required_bool(metadata: dict[str, Any], key: str) -> bool:
+    value = metadata.get(key)
+    if not isinstance(value, bool):
+        raise ExternalRuntimeError(f"agent-runtime metadata {key!r} must be a boolean")
+    return value
 
 
 def _exact_model(metadata: dict[str, Any]) -> str:

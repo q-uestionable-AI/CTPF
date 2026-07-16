@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
+import importlib.metadata
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
-from urllib.parse import urlparse
 
 from ctpf import __version__, driven_inference, external_runtime
 from ctpf.automation.canonical import sha256_digest
-from ctpf.automation.contracts import ExperimentMode, NetworkClass, TargetPolicy
+from ctpf.automation.contracts import (
+    BillingClass,
+    DataEgressClass,
+    ExperimentMode,
+    NetworkClass,
+    TargetPolicy,
+)
+from ctpf.core import hosted_inference, llm_openai
+from ctpf.core.hosted_inference import canonicalize_endpoint
 from ctpf.driven_inference import OpenAICompatibleTargetProfile
 from ctpf.external_runtime import (
     ClaudeCodeTargetProfile,
@@ -27,18 +34,24 @@ _MIN_TEMPERATURE = Decimal("0")
 _MAX_TEMPERATURE = Decimal("2")
 _REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 _INFERENCE_BEHAVIOR_KEYS = {
+    "authority_contract_version",
+    "billing",
     "credential_alias",
+    "data_egress",
     "driver",
     "driver_source_hash",
     "endpoint",
     "generation_parameters",
-    "max_provider_rounds",
-    "max_tokens",
+    "limits",
     "model",
     "target_id",
     "target_type",
+    "transport",
 }
 _RUNTIME_BEHAVIOR_KEYS = {
+    "authority_contract_version",
+    "billing",
+    "data_egress",
     "driver",
     "driver_source_hash",
     "environment_policy",
@@ -52,6 +65,36 @@ _RUNTIME_BEHAVIOR_KEYS = {
     "target_id",
     "target_type",
     "timeout_seconds",
+}
+_ENDPOINT_KEYS = {
+    "base_path",
+    "host",
+    "network_class",
+    "normalized_url",
+    "origin",
+    "port",
+    "scheme",
+}
+_INFERENCE_LIMIT_KEYS = {
+    "max_input_tokens",
+    "max_output_tokens",
+    "max_provider_rounds",
+    "max_request_bytes",
+    "max_response_bytes",
+    "max_tool_calls_per_session",
+}
+_TRANSPORT_KEYS = {
+    "concurrent_requests",
+    "deadlines_seconds",
+    "environment_proxy_policy",
+    "http_protocol",
+    "httpcore_version",
+    "httpx_version",
+    "max_attempts",
+    "redirect_policy",
+    "retry_count",
+    "source_hashes",
+    "tls_policy",
 }
 
 
@@ -202,6 +245,20 @@ def load_target_identity(target_id: str, *, db_path: Path | None = None) -> Targ
         raise TargetIdentityError(str(exc)) from exc
     if profile.target_id != target_id:
         raise TargetIdentityError("resolved target ID does not match the requested full ID")
+    return target_identity_from_profile(profile)
+
+
+def target_identity_from_profile(
+    profile: OpenAICompatibleTargetProfile | ClaudeCodeTargetProfile,
+) -> TargetIdentity:
+    """Fingerprint one already validated demonstrated target profile.
+
+    Args:
+        profile: Exact non-secret demonstrated target settings.
+
+    Returns:
+        Complete authority-bearing target identity.
+    """
     if isinstance(profile, OpenAICompatibleTargetProfile):
         return _inference_identity(profile)
     if isinstance(profile, ClaudeCodeTargetProfile):
@@ -228,6 +285,7 @@ def target_identity_from_policy(target: TargetPolicy) -> TargetIdentity:
         raise TargetIdentityError("policy target behavior has a mismatched target ID")
     if behavior.get("target_type") != target.target_type:
         raise TargetIdentityError("policy target behavior has a mismatched target type")
+    _validate_policy_authority(target, behavior)
     if target.target_type == "inference":
         _validate_inference_snapshot(behavior, target.network_class)
     elif target.target_type == "agent-runtime":
@@ -257,22 +315,14 @@ def classify_inference_endpoint(endpoint: str) -> NetworkClass:
             authority or contains ambiguous URL components.
     """
     try:
-        parsed = urlparse(endpoint)
-        port = parsed.port
+        canonical = canonicalize_endpoint(endpoint)
     except ValueError as exc:
-        raise TargetIdentityError(f"invalid inference endpoint: {exc}") from exc
-    if parsed.username is not None or parsed.password is not None:
-        raise TargetIdentityError("inference endpoint must not contain credentials")
-    if parsed.query or parsed.fragment or not parsed.hostname:
-        raise TargetIdentityError("inference endpoint must not contain query or fragment data")
-    loopback = _is_loopback_host(parsed.hostname)
-    if parsed.scheme == "http" and loopback:
-        return NetworkClass.LOOPBACK
-    if parsed.scheme != "https" or loopback:
-        raise TargetIdentityError("non-loopback inference endpoints must use HTTPS")
-    _validate_public_host(parsed.hostname)
-    _ = port
-    return NetworkClass.HTTPS_PUBLIC
+        raise TargetIdentityError(str(exc)) from exc
+    return (
+        NetworkClass.LOOPBACK
+        if canonical.network_class == NetworkClass.LOOPBACK.value
+        else NetworkClass.HTTPS_PUBLIC
+    )
 
 
 def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
@@ -287,7 +337,7 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
 ) -> ScenarioCapability:
     payload: dict[str, Any] = {
         "conditions": ["baseline", "manipulated", "hardened"],
-        "contract_version": 1,
+        "contract_version": 2,
         "effect_ids": list(effects),
         "modes": [mode.value for mode in modes],
         "package_version": __version__,
@@ -301,7 +351,7 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
     }
     return ScenarioCapability(
         scenario=scenario,
-        contract_version=1,
+        contract_version=2,
         modes=modes,
         conditions=("baseline", "manipulated", "hardened"),
         sessions_per_trial=sessions,
@@ -318,23 +368,42 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
 
 def _inference_identity(profile: OpenAICompatibleTargetProfile) -> TargetIdentity:
     generation = profile.generation_parameters()
+    endpoint = canonicalize_endpoint(profile.endpoint)
+    network_class = classify_inference_endpoint(endpoint.normalized_url)
+    _validate_inference_profile_authority(profile, network_class)
     behavior = {
+        "authority_contract_version": 1,
+        "billing": _billing_payload(
+            profile.billing_class,
+            profile.request_cost_ceiling_microusd,
+            profile.residual_cost_acknowledged,
+        ),
         "credential_alias": profile.credential_name,
+        "data_egress": _egress_payload(
+            profile.data_egress_class,
+            profile.retention_acknowledged,
+        ),
         "driver": "openai-compatible",
         "driver_source_hash": _file_hash(Path(driven_inference.__file__)),
-        "endpoint": profile.endpoint,
+        "endpoint": endpoint.to_payload(),
         "generation_parameters": {
             "reasoning_effort": generation.get("reasoning_effort"),
             "seed": generation.get("seed"),
             "temperature": _decimal_string(generation.get("temperature")),
         },
-        "max_tokens": profile.max_tokens,
-        "max_provider_rounds": driven_inference.DEFAULT_MAX_ROUNDS,
+        "limits": {
+            "max_input_tokens": profile.max_input_tokens,
+            "max_output_tokens": profile.max_tokens,
+            "max_provider_rounds": driven_inference.DEFAULT_MAX_ROUNDS,
+            "max_request_bytes": hosted_inference.MAX_REQUEST_BYTES,
+            "max_response_bytes": hosted_inference.MAX_RESPONSE_BYTES,
+            "max_tool_calls_per_session": driven_inference.MAX_TOOL_CALLS_PER_SESSION,
+        },
         "model": profile.model,
         "target_id": profile.target_id,
         "target_type": "inference",
+        "transport": _transport_payload(endpoint),
     }
-    network_class = classify_inference_endpoint(profile.endpoint)
     return TargetIdentity(
         profile.target_id,
         "inference",
@@ -345,9 +414,26 @@ def _inference_identity(profile: OpenAICompatibleTargetProfile) -> TargetIdentit
 
 
 def _runtime_identity(profile: ClaudeCodeTargetProfile) -> TargetIdentity:
+    if (
+        profile.billing_class != BillingClass.EXTERNAL_RUNTIME
+        or profile.data_egress_class != DataEgressClass.EXTERNAL_RUNTIME
+        or not profile.retention_acknowledged
+        or not profile.residual_cost_acknowledged
+    ):
+        raise TargetIdentityError("external runtime authority declarations are incomplete")
     executable = Path(profile.executable).resolve()
     executable_hash = _file_hash(executable)
     behavior = {
+        "authority_contract_version": 1,
+        "billing": _billing_payload(
+            profile.billing_class,
+            None,
+            profile.residual_cost_acknowledged,
+        ),
+        "data_egress": _egress_payload(
+            profile.data_egress_class,
+            profile.retention_acknowledged,
+        ),
         "driver": "claude-code-cli",
         "driver_source_hash": _file_hash(Path(external_runtime.__file__)),
         "environment_policy": "minimal non-secret allowlist",
@@ -371,25 +457,56 @@ def _runtime_identity(profile: ClaudeCodeTargetProfile) -> TargetIdentity:
     )
 
 
+def _validate_inference_profile_authority(
+    profile: OpenAICompatibleTargetProfile,
+    network_class: NetworkClass,
+) -> None:
+    if network_class == NetworkClass.LOOPBACK:
+        if (
+            profile.billing_class != BillingClass.UNMETERED
+            or profile.request_cost_ceiling_microusd is not None
+            or profile.data_egress_class != DataEgressClass.LOCAL_ONLY
+            or profile.retention_acknowledged
+            or profile.residual_cost_acknowledged
+        ):
+            raise TargetIdentityError("loopback inference authority declarations are invalid")
+        return
+    if profile.billing_class == BillingClass.EXTERNAL_RUNTIME:
+        raise TargetIdentityError("hosted inference billing class is invalid")
+    if profile.billing_class == BillingClass.METERED:
+        ceiling = profile.request_cost_ceiling_microusd
+        if isinstance(ceiling, bool) or not isinstance(ceiling, int) or ceiling < 0:
+            raise TargetIdentityError("metered hosted inference requires a request cost ceiling")
+    elif profile.request_cost_ceiling_microusd is not None:
+        raise TargetIdentityError("unmetered hosted inference must not declare request cost")
+    if (
+        profile.data_egress_class != DataEgressClass.PACKAGED_SYNTHETIC_REMOTE
+        or not profile.retention_acknowledged
+        or not profile.residual_cost_acknowledged
+    ):
+        raise TargetIdentityError("hosted inference authority declarations are incomplete")
+
+
 def _validate_inference_snapshot(
     behavior: dict[str, Any],
     network_class: NetworkClass,
 ) -> None:
     _require_behavior_keys(behavior, _INFERENCE_BEHAVIOR_KEYS)
+    if behavior["authority_contract_version"] != 1:
+        raise TargetIdentityError("policy inference authority contract is unsupported")
     if behavior["driver"] != "openai-compatible":
         raise TargetIdentityError("policy inference driver is unsupported")
     _require_installed_driver_hash(behavior["driver_source_hash"], Path(driven_inference.__file__))
-    endpoint = _require_text(behavior["endpoint"], "endpoint")
-    if endpoint.endswith("/"):
-        raise TargetIdentityError("policy inference endpoint must be normalized")
-    if classify_inference_endpoint(endpoint) != network_class:
+    endpoint = _validate_endpoint_snapshot(behavior["endpoint"])
+    if classify_inference_endpoint(endpoint.normalized_url) != network_class:
         raise TargetIdentityError("policy inference network class does not match its endpoint")
     _require_text(behavior["model"], "model")
     _require_text(behavior["credential_alias"], "credential_alias")
-    _require_positive_int(behavior["max_tokens"], "max_tokens")
-    if behavior["max_provider_rounds"] != driven_inference.DEFAULT_MAX_ROUNDS:
-        raise TargetIdentityError("policy inference provider-round limit is not installed")
     _validate_generation_snapshot(behavior["generation_parameters"])
+    _validate_inference_limits(behavior["limits"])
+    _validate_transport_snapshot(behavior["transport"], endpoint)
+    _validate_billing_snapshot(behavior["billing"])
+    _validate_egress_snapshot(behavior["data_egress"])
 
 
 def _validate_runtime_snapshot(
@@ -397,6 +514,8 @@ def _validate_runtime_snapshot(
     network_class: NetworkClass,
 ) -> None:
     _require_behavior_keys(behavior, _RUNTIME_BEHAVIOR_KEYS)
+    if behavior["authority_contract_version"] != 1:
+        raise TargetIdentityError("policy runtime authority contract is unsupported")
     if network_class != NetworkClass.EXTERNAL_RUNTIME:
         raise TargetIdentityError("policy runtime must use the external-runtime network class")
     if behavior["driver"] != "claude-code-cli":
@@ -415,6 +534,145 @@ def _validate_runtime_snapshot(
         raise TargetIdentityError("policy runtime identity-probe process count is not installed")
     if behavior["identity_probe_timeout_seconds"] != external_runtime.VERSION_PROBE_TIMEOUT_SECONDS:
         raise TargetIdentityError("policy runtime identity-probe timeout is not installed")
+    _validate_billing_snapshot(behavior["billing"])
+    _validate_egress_snapshot(behavior["data_egress"])
+
+
+def _billing_payload(
+    billing_class: BillingClass,
+    request_cost_ceiling_microusd: int | None,
+    residual_cost_acknowledged: bool,
+) -> dict[str, Any]:
+    return {
+        "billing_class": billing_class.value,
+        "request_cost_ceiling_microusd": request_cost_ceiling_microusd,
+        "residual_cost_acknowledged": residual_cost_acknowledged,
+    }
+
+
+def _egress_payload(
+    data_egress_class: DataEgressClass,
+    retention_acknowledged: bool,
+) -> dict[str, Any]:
+    return {
+        "data_egress_class": data_egress_class.value,
+        "retention_acknowledged": retention_acknowledged,
+    }
+
+
+def _transport_payload(endpoint: hosted_inference.CanonicalEndpoint) -> dict[str, Any]:
+    return {
+        "concurrent_requests": hosted_inference.MAX_CONCURRENT_REQUESTS,
+        "deadlines_seconds": {
+            "connect": hosted_inference.CONNECT_TIMEOUT_SECONDS,
+            "overall": hosted_inference.OVERALL_TIMEOUT_SECONDS,
+            "pool": hosted_inference.POOL_TIMEOUT_SECONDS,
+            "read": hosted_inference.READ_TIMEOUT_SECONDS,
+            "write": hosted_inference.WRITE_TIMEOUT_SECONDS,
+        },
+        "environment_proxy_policy": hosted_inference.ENVIRONMENT_PROXY_POLICY,
+        "http_protocol": hosted_inference.HTTP_PROTOCOL,
+        "httpcore_version": importlib.metadata.version("httpcore"),
+        "httpx_version": importlib.metadata.version("httpx"),
+        "max_attempts": hosted_inference.MAX_ATTEMPTS,
+        "redirect_policy": hosted_inference.REDIRECT_POLICY,
+        "retry_count": 0,
+        "source_hashes": {
+            "hosted_inference.py": _file_hash(Path(hosted_inference.__file__)),
+            "llm_openai.py": _file_hash(Path(llm_openai.__file__)),
+        },
+        "tls_policy": (
+            hosted_inference.TLS_POLICY if endpoint.scheme == "https" else "not_applicable"
+        ),
+    }
+
+
+def _validate_policy_authority(target: TargetPolicy, behavior: dict[str, Any]) -> None:
+    billing = behavior.get("billing")
+    egress = behavior.get("data_egress")
+    if not isinstance(billing, dict) or not isinstance(egress, dict):
+        raise TargetIdentityError("policy target authority declarations are missing")
+    expected_billing = _billing_payload(
+        target.billing_class,
+        target.request_cost_ceiling_microusd,
+        target.residual_cost_acknowledged,
+    )
+    expected_egress = _egress_payload(
+        target.data_egress_class,
+        target.retention_acknowledged,
+    )
+    if billing != expected_billing or egress != expected_egress:
+        raise TargetIdentityError("policy target authority differs from its fingerprint")
+
+
+def _validate_endpoint_snapshot(raw: Any) -> hosted_inference.CanonicalEndpoint:
+    if not isinstance(raw, dict):
+        raise TargetIdentityError("policy inference endpoint must be an object")
+    _require_behavior_keys(raw, _ENDPOINT_KEYS)
+    normalized = _require_text(raw["normalized_url"], "endpoint.normalized_url")
+    try:
+        endpoint = canonicalize_endpoint(normalized)
+    except ValueError as exc:
+        raise TargetIdentityError(str(exc)) from exc
+    if raw != endpoint.to_payload():
+        raise TargetIdentityError("policy inference endpoint is not canonical")
+    return endpoint
+
+
+def _validate_inference_limits(raw: Any) -> None:
+    if not isinstance(raw, dict):
+        raise TargetIdentityError("policy inference limits must be an object")
+    _require_behavior_keys(raw, _INFERENCE_LIMIT_KEYS)
+    _require_positive_int(raw["max_input_tokens"], "max_input_tokens")
+    _require_positive_int(raw["max_output_tokens"], "max_output_tokens")
+    installed = {
+        "max_provider_rounds": driven_inference.DEFAULT_MAX_ROUNDS,
+        "max_request_bytes": hosted_inference.MAX_REQUEST_BYTES,
+        "max_response_bytes": hosted_inference.MAX_RESPONSE_BYTES,
+        "max_tool_calls_per_session": driven_inference.MAX_TOOL_CALLS_PER_SESSION,
+    }
+    if any(raw[key] != value for key, value in installed.items()):
+        raise TargetIdentityError("policy inference limits differ from installed controls")
+
+
+def _validate_transport_snapshot(
+    raw: Any,
+    endpoint: hosted_inference.CanonicalEndpoint,
+) -> None:
+    if not isinstance(raw, dict):
+        raise TargetIdentityError("policy inference transport must be an object")
+    _require_behavior_keys(raw, _TRANSPORT_KEYS)
+    if raw != _transport_payload(endpoint):
+        raise TargetIdentityError("policy inference transport differs from installed controls")
+
+
+def _validate_billing_snapshot(raw: Any) -> None:
+    expected = {
+        "billing_class",
+        "request_cost_ceiling_microusd",
+        "residual_cost_acknowledged",
+    }
+    if not isinstance(raw, dict):
+        raise TargetIdentityError("policy target billing must be an object")
+    _require_behavior_keys(raw, expected)
+    _require_text(raw["billing_class"], "billing_class")
+    ceiling = raw["request_cost_ceiling_microusd"]
+    if ceiling is not None and (
+        isinstance(ceiling, bool) or not isinstance(ceiling, int) or ceiling < 0
+    ):
+        raise TargetIdentityError("policy target request cost ceiling is invalid")
+    if not isinstance(raw["residual_cost_acknowledged"], bool):
+        raise TargetIdentityError("policy target residual-cost acknowledgement is invalid")
+
+
+def _validate_egress_snapshot(raw: Any) -> None:
+    expected = {"data_egress_class", "retention_acknowledged"}
+    if not isinstance(raw, dict):
+        raise TargetIdentityError("policy target data egress must be an object")
+    _require_behavior_keys(raw, expected)
+    _require_text(raw["data_egress_class"], "data_egress_class")
+    if not isinstance(raw["retention_acknowledged"], bool):
+        raise TargetIdentityError("policy target retention acknowledgement is invalid")
 
 
 def _validate_generation_snapshot(raw: Any) -> None:
@@ -485,32 +743,6 @@ def _decimal_string(raw: Any) -> str | None:
         raise TargetIdentityError("target temperature must be numeric")
     value = format(raw, ".17g")
     return "0" if value in {"-0", "-0.0"} else value
-
-
-def _is_loopback_host(host: str) -> bool:
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _validate_public_host(host: str) -> None:
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            encoded = host.encode("idna").decode("ascii")
-        except UnicodeError as exc:
-            raise TargetIdentityError("inference endpoint hostname is invalid") from exc
-        if not encoded or "." not in encoded:
-            raise TargetIdentityError(
-                "public HTTPS endpoint requires a fully qualified hostname"
-            ) from None
-        return
-    if not address.is_global:
-        raise TargetIdentityError("HTTPS endpoint IP must be globally routable")
 
 
 def _file_hash(path: Path) -> str:

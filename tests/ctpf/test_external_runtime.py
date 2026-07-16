@@ -87,6 +87,8 @@ def _create_runtime_target(
                 "driver": "claude-code-cli",
                 "model": "claude-opus-4-1-20250805",
                 "timeout_seconds": "90",
+                "retention_acknowledged": True,
+                "residual_cost_acknowledged": True,
             },
         )
 
@@ -152,6 +154,10 @@ class TestClaudeCodeTargetProfile:
                     "driver": "openai-compatible",
                     "model": "model-a",
                     "credential": "remote-a",
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
                 },
             )
 

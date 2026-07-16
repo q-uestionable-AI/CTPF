@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 from dataclasses import replace
 from pathlib import Path
@@ -13,6 +14,7 @@ from ctpf.automation import targets
 from ctpf.automation.canonical import sha256_digest
 from ctpf.automation.contracts import (
     BillingClass,
+    DataEgressClass,
     ExperimentMode,
     NetworkClass,
     TargetPolicy,
@@ -23,6 +25,7 @@ from ctpf.automation.targets import (
     installed_scenario_capabilities,
     load_target_identity,
     target_identity_from_policy,
+    target_identity_from_profile,
 )
 from ctpf.core.db import create_target, get_connection
 
@@ -50,7 +53,7 @@ def test_installed_capabilities_are_stable_and_cover_demonstrated_scenarios() ->
     ("endpoint", "expected"),
     [
         ("http://127.0.0.1:8000/v1", NetworkClass.LOOPBACK),
-        ("http://localhost:8000/v1", NetworkClass.LOOPBACK),
+        ("https://127.0.0.1:8000/v1", NetworkClass.LOOPBACK),
         ("https://models.example.test/v1", NetworkClass.HTTPS_PUBLIC),
     ],
 )
@@ -63,7 +66,7 @@ def test_inference_endpoint_classification(endpoint: str, expected: NetworkClass
     "endpoint",
     [
         "http://models.example.test/v1",
-        "https://127.0.0.1/v1",
+        "http://localhost:8000/v1",
         "https://192.168.1.20/v1",
         "https://user:secret@models.example.test/v1",
         "https://unqualified/v1",
@@ -93,6 +96,10 @@ def test_inference_target_identity_pins_behavior_without_secret_value(tmp_path: 
                 "reasoning_effort": "low",
                 "seed": "42",
                 "temperature": "0",
+                "billing_class": "unmetered",
+                "data_egress_class": "packaged_synthetic_remote",
+                "retention_acknowledged": True,
+                "residual_cost_acknowledged": True,
             },
         )
 
@@ -101,9 +108,9 @@ def test_inference_target_identity_pins_behavior_without_secret_value(tmp_path: 
     assert identity.target_id == target_id
     assert identity.network_class == NetworkClass.HTTPS_PUBLIC
     assert identity.behavior["credential_alias"] == "remote-a"
-    assert identity.behavior["max_provider_rounds"] == 12
+    assert identity.behavior["limits"]["max_provider_rounds"] == 12
     assert len(identity.behavior["driver_source_hash"]) == 64
-    assert identity.behavior["endpoint"] == "https://models.example.test/v1"
+    assert identity.behavior["endpoint"]["normalized_url"] == "https://models.example.test/v1"
     assert identity.behavior["generation_parameters"] == {
         "reasoning_effort": "low",
         "seed": 42,
@@ -131,6 +138,8 @@ def test_external_runtime_target_identity_pins_inspected_runtime(
                 "driver": "claude-code-cli",
                 "model": "claude-opus-4-1-20250805",
                 "timeout_seconds": "90",
+                "retention_acknowledged": True,
+                "residual_cost_acknowledged": True,
             },
         )
     monkeypatch.setattr(
@@ -167,6 +176,16 @@ def test_signed_runtime_snapshot_validation_is_stateless(
     """Machine validation never launches the Claude identity probe or reloads a profile."""
     target_id = "a" * 32
     behavior = {
+        "authority_contract_version": 1,
+        "billing": {
+            "billing_class": "external_runtime",
+            "request_cost_ceiling_microusd": None,
+            "residual_cost_acknowledged": True,
+        },
+        "data_egress": {
+            "data_egress_class": "external_runtime",
+            "retention_acknowledged": True,
+        },
         "driver": "claude-code-cli",
         "driver_source_hash": hashlib.sha256(
             Path(external_runtime.__file__).read_bytes()
@@ -191,6 +210,9 @@ def test_signed_runtime_snapshot_validation_is_stateless(
         NetworkClass.EXTERNAL_RUNTIME,
         BillingClass.EXTERNAL_RUNTIME,
         None,
+        DataEgressClass.EXTERNAL_RUNTIME,
+        True,
+        True,
     )
 
     def unexpected_profile_load(*_args: object, **_kwargs: object) -> None:
@@ -209,24 +231,21 @@ def test_signed_runtime_snapshot_validation_is_stateless(
 def test_signed_inference_snapshot_cannot_understate_fixed_driver_rounds() -> None:
     """A self-consistent snapshot still fails if it changes installed driver constants."""
     target_id = "a" * 32
-    behavior = {
-        "credential_alias": "test-key",
-        "driver": "openai-compatible",
-        "driver_source_hash": hashlib.sha256(
-            Path(driven_inference.__file__).read_bytes()
-        ).hexdigest(),
-        "endpoint": "http://127.0.0.1:11434/v1",
-        "generation_parameters": {
-            "reasoning_effort": None,
-            "seed": None,
-            "temperature": "0",
-        },
-        "max_provider_rounds": 1,
-        "max_tokens": 256,
-        "model": "test-model",
-        "target_id": target_id,
-        "target_type": "inference",
-    }
+    identity = target_identity_from_profile(
+        driven_inference.OpenAICompatibleTargetProfile(
+            target_id=target_id,
+            name="test target",
+            endpoint="http://127.0.0.1:11434/v1",
+            model="test-model",
+            credential_name="test-key",
+            max_tokens=256,
+            max_input_tokens=256,
+        )
+    )
+    behavior = dict(identity.behavior)
+    limits = dict(behavior["limits"])
+    limits["max_provider_rounds"] = 1
+    behavior["limits"] = limits
     policy_target = TargetPolicy(
         target_id,
         sha256_digest(behavior),
@@ -235,13 +254,109 @@ def test_signed_inference_snapshot_cannot_understate_fixed_driver_rounds() -> No
         NetworkClass.LOOPBACK,
         BillingClass.UNMETERED,
         None,
+        DataEgressClass.LOCAL_ONLY,
+        False,
+        False,
     )
 
-    with pytest.raises(TargetIdentityError, match="provider-round"):
+    with pytest.raises(TargetIdentityError, match="installed controls"):
         target_identity_from_policy(policy_target)
 
-    behavior["max_provider_rounds"] = driven_inference.DEFAULT_MAX_ROUNDS
+    limits["max_provider_rounds"] = driven_inference.DEFAULT_MAX_ROUNDS
+    behavior["limits"] = limits
     behavior["driver_source_hash"] = "d" * 64
     changed = replace(policy_target, behavior=behavior, target_fingerprint=sha256_digest(behavior))
     with pytest.raises(TargetIdentityError, match="installed driver"):
         target_identity_from_policy(changed)
+
+
+def test_every_profile_authority_mutation_changes_inference_fingerprint() -> None:
+    """Every configurable endpoint, model, credential, generation, and budget pin is hashed."""
+    profile = driven_inference.OpenAICompatibleTargetProfile(
+        target_id="a" * 32,
+        name="remote test",
+        endpoint="https://models.example.test/v1",
+        model="model-a",
+        credential_name="remote-a",
+        max_tokens=256,
+        temperature=0.0,
+        seed=1,
+        reasoning_effort="low",
+        max_input_tokens=512,
+        data_egress_class=DataEgressClass.PACKAGED_SYNTHETIC_REMOTE,
+        retention_acknowledged=True,
+        residual_cost_acknowledged=True,
+    )
+    baseline = target_identity_from_profile(profile).fingerprint
+    mutations = (
+        replace(profile, endpoint="https://other.example.test/v1"),
+        replace(profile, model="model-b"),
+        replace(profile, credential_name="remote-b"),
+        replace(profile, max_tokens=257),
+        replace(profile, max_input_tokens=513),
+        replace(profile, temperature=0.1),
+        replace(profile, seed=2),
+        replace(profile, reasoning_effort="medium"),
+        replace(
+            profile,
+            billing_class=BillingClass.METERED,
+            request_cost_ceiling_microusd=10_000,
+        ),
+    )
+
+    fingerprints = {target_identity_from_profile(item).fingerprint for item in mutations}
+
+    assert baseline not in fingerprints
+    assert len(fingerprints) == len(mutations)
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("limits", "max_provider_rounds", 13),
+        ("limits", "max_request_bytes", 1),
+        ("limits", "max_response_bytes", 1),
+        ("limits", "max_tool_calls_per_session", 13),
+        ("transport", "max_attempts", 2),
+        ("transport", "concurrent_requests", 2),
+        ("transport", "retry_count", 1),
+        ("transport", "redirect_policy", "follow"),
+        ("transport", "environment_proxy_policy", "inherit"),
+        ("transport", "http_protocol", "HTTP/2"),
+        ("transport", "httpx_version", "changed"),
+        ("transport", "tls_policy", "disabled"),
+    ],
+)
+def test_signed_snapshot_cannot_mutate_installed_transport_authority(
+    section: str,
+    key: str,
+    value: object,
+) -> None:
+    """A re-fingerprinted policy still cannot invent uninstalled transport controls."""
+    profile = driven_inference.OpenAICompatibleTargetProfile(
+        target_id="a" * 32,
+        name="local test",
+        endpoint="http://127.0.0.1:11434/v1",
+        model="model-a",
+        credential_name="local-a",
+        max_tokens=256,
+        max_input_tokens=512,
+    )
+    identity = target_identity_from_profile(profile)
+    behavior = copy.deepcopy(identity.behavior)
+    behavior[section][key] = value
+    policy_target = TargetPolicy(
+        profile.target_id,
+        sha256_digest(behavior),
+        "inference",
+        behavior,
+        NetworkClass.LOOPBACK,
+        BillingClass.UNMETERED,
+        None,
+        DataEgressClass.LOCAL_ONLY,
+        False,
+        False,
+    )
+
+    with pytest.raises(TargetIdentityError, match="installed controls"):
+        target_identity_from_policy(policy_target)

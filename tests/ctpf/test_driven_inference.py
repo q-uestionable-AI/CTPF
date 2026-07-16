@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from ctpf import driven_inference
+from ctpf.automation.contracts import BillingClass, DataEgressClass
 from ctpf.core.db import create_target, get_connection
 from ctpf.core.llm import NormalizedResponse, ToolCall, ToolSpec
 from ctpf.driven_inference import (
@@ -103,6 +104,11 @@ def _profile() -> OpenAICompatibleTargetProfile:
         temperature=0.0,
         seed=7,
         reasoning_effort="none",
+        max_input_tokens=1_024,
+        billing_class=BillingClass.UNMETERED,
+        data_egress_class=DataEgressClass.PACKAGED_SYNTHETIC_REMOTE,
+        retention_acknowledged=True,
+        residual_cost_acknowledged=True,
     )
 
 
@@ -141,6 +147,10 @@ class TestTargetProfile:
                     "temperature": "0",
                     "seed": "42",
                     "reasoning_effort": reasoning_effort,
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
                 },
             )
 
@@ -168,6 +178,10 @@ class TestTargetProfile:
                     "model": "model-a",
                     "credential": "remote-a",
                     "max_tokens": "many",
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
                 },
             )
 
@@ -187,6 +201,10 @@ class TestTargetProfile:
                     "model": "model-a",
                     "credential": "remote-a",
                     "reasoning_effort": "off",
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
                 },
             )
 
@@ -210,13 +228,13 @@ class TestOpenAICompatibleDriver:
                     tool_calls=[ToolCall("read_inbox", {}, id="call-1")],
                     finish_reason="tool_calls",
                     raw_response={"id": "response-1"},
-                    model="openai/research-model-1",
+                    requested_model="research-model-1",
                 ),
                 NormalizedResponse(
                     content="Done.",
                     finish_reason="stop",
                     raw_response={"id": "response-2"},
-                    model="openai/research-model-1",
+                    requested_model="research-model-1",
                 ),
             ]
         )
@@ -231,7 +249,7 @@ class TestOpenAICompatibleDriver:
         assert result.final_content == "Done."
         assert result.round_count == 2
         assert session.calls == [("read_inbox", {})]
-        assert client.requests[0]["model"] == "openai/research-model-1"
+        assert client.requests[0]["model"] == "research-model-1"
         second_messages = client.requests[1]["messages"]
         assert second_messages[-2]["tool_calls"][0]["id"] == "call-1"
         assert second_messages[-1]["tool_call_id"] == "call-1"
@@ -255,7 +273,7 @@ class TestOpenAICompatibleDriver:
                     tool_calls=[ToolCall("read_inbox", {})],
                     finish_reason="tool_calls",
                     raw_response={"id": "response-1"},
-                    model="openai/research-model-1",
+                    requested_model="research-model-1",
                 )
             ]
         )

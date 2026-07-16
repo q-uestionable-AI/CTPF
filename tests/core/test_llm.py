@@ -1,98 +1,39 @@
-"""Tests for the provider-agnostic LLM module."""
+"""Tests for provider-agnostic response models and evidence redaction."""
 
 from __future__ import annotations
 
-import json
-
-import pytest
-
-from ctpf.core.llm import (
-    NormalizedResponse,
-    ToolCall,
-    get_provider_client,
-    parse_model_string,
-    serialize_evidence,
-)
+from ctpf.core.llm import NormalizedResponse, ToolCall
+from ctpf.core.redaction import REDACTED, TRUNCATED, sanitize_evidence
 
 
-class TestParseModelString:
-    """Tests for parse_model_string()."""
+def test_response_separates_requested_reported_and_proven_identity() -> None:
+    """Provider claims do not overwrite requested or artifact-proven identity."""
+    response = NormalizedResponse(
+        requested_model="requested-model",
+        provider_reported_model="claimed-model",
+        artifact_proven_model=None,
+        tool_calls=[ToolCall("read_status", {}, "call-1")],
+    )
 
-    def test_with_provider(self) -> None:
-        provider, model_id = parse_model_string("anthropic/claude-sonnet-4-20250514")
-        assert provider == "anthropic"
-        assert model_id == "claude-sonnet-4-20250514"
-
-    def test_bare(self) -> None:
-        provider, model_id = parse_model_string("claude-sonnet-4-20250514")
-        assert provider == "anthropic"
-        assert model_id == "claude-sonnet-4-20250514"
-
-    def test_ollama(self) -> None:
-        provider, model_id = parse_model_string("ollama/llama3.1:8b")
-        assert provider == "ollama"
-        assert model_id == "llama3.1:8b"
-
-    def test_empty_model_id_raises(self) -> None:
-        with pytest.raises(ValueError, match="both provider and model-id must be non-empty"):
-            parse_model_string("openai/")
-
-    def test_empty_provider_raises(self) -> None:
-        with pytest.raises(ValueError, match="both provider and model-id must be non-empty"):
-            parse_model_string("/gpt-4o")
-
-    def test_slash_only_raises(self) -> None:
-        with pytest.raises(ValueError, match="both provider and model-id must be non-empty"):
-            parse_model_string("/")
-
-    def test_openai(self) -> None:
-        provider, model_id = parse_model_string("openai/gpt-4o")
-        assert provider == "openai"
-        assert model_id == "gpt-4o"
+    assert response.requested_model == "requested-model"
+    assert response.provider_reported_model == "claimed-model"
+    assert response.artifact_proven_model is None
 
 
-class TestSerializeEvidence:
-    """Tests for serialize_evidence()."""
+def test_recursive_sanitizer_redacts_keys_values_and_bounds_depth() -> None:
+    """Nested secret echoes cannot reach durable evidence."""
+    value: dict[str, object] = {
+        "authorization": "Bearer exact-secret",
+        "nested": {"message": "provider echoed exact-secret"},
+    }
+    cursor = value
+    for _ in range(14):
+        child: dict[str, object] = {}
+        cursor["child"] = child
+        cursor = child
 
-    def test_dict_raw_response(self) -> None:
-        response = NormalizedResponse(
-            raw_response={"choices": [{"message": {"content": "hello"}}]},
-            model="test",
-        )
-        result = json.loads(serialize_evidence(response))
-        assert result["choices"][0]["message"]["content"] == "hello"
+    sanitized = sanitize_evidence(value, ("exact-secret",))
 
-    def test_model_response_with_model_dump(self) -> None:
-        class FakeResponse:
-            def model_dump(self) -> dict:
-                return {"id": "resp-1", "choices": []}
-
-        response = NormalizedResponse(raw_response=FakeResponse(), model="test")
-        result = json.loads(serialize_evidence(response))
-        assert result["id"] == "resp-1"
-
-    def test_none_raw_response(self) -> None:
-        response = NormalizedResponse(
-            content="hello",
-            tool_calls=[ToolCall(name="test", arguments={"a": 1})],
-            model="test",
-        )
-        result = json.loads(serialize_evidence(response))
-        assert result["content"] == "hello"
-        assert result["tool_calls"][0]["name"] == "test"
-
-
-class TestGetProviderClient:
-    """Tests for get_provider_client()."""
-
-    def test_returns_litellm(self) -> None:
-        from ctpf.core.llm_litellm import LiteLLMClient
-
-        client = get_provider_client("anthropic/claude-sonnet-4-20250514")
-        assert isinstance(client, LiteLLMClient)
-
-    def test_returns_litellm_for_bare_model(self) -> None:
-        from ctpf.core.llm_litellm import LiteLLMClient
-
-        client = get_provider_client("claude-sonnet-4-20250514")
-        assert isinstance(client, LiteLLMClient)
+    assert sanitized["authorization"] == REDACTED
+    assert sanitized["nested"]["message"] == f"provider echoed {REDACTED}"
+    assert TRUNCATED in str(sanitized)

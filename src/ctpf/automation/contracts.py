@@ -16,9 +16,9 @@ from ctpf.automation.canonical import (
     sha256_digest,
 )
 
-RUN_SPEC_SCHEMA_VERSION = 1
-POLICY_SCHEMA_VERSION = 2
-GRANT_SCHEMA_VERSION = 1
+RUN_SPEC_SCHEMA_VERSION = 2
+POLICY_SCHEMA_VERSION = 3
+GRANT_SCHEMA_VERSION = 2
 # Backward-compatible public name for the original RunSpec schema version.
 SCHEMA_VERSION = RUN_SPEC_SCHEMA_VERSION
 SIGNING_ALGORITHM = "hmac-sha256"
@@ -63,6 +63,14 @@ class NetworkClass(StrEnum):
 
     LOOPBACK = "loopback"
     HTTPS_PUBLIC = "https_public"
+    EXTERNAL_RUNTIME = "external_runtime"
+
+
+class DataEgressClass(StrEnum):
+    """Human-approved classes of information allowed to leave CTPF."""
+
+    LOCAL_ONLY = "local_only"
+    PACKAGED_SYNTHETIC_REMOTE = "packaged_synthetic_remote"
     EXTERNAL_RUNTIME = "external_runtime"
 
 
@@ -112,15 +120,17 @@ class ResourceLimits:
 
     wall_clock_seconds: int
     provider_requests: int
+    input_tokens_reserved: int
     output_tokens_reserved: int
     tool_calls: int
     runtime_processes: int
-    cost_limit_microusd: int
+    cost_limit_microusd: int | None
 
     def to_payload(self) -> dict[str, Any]:
         """Return a canonical JSON-compatible representation."""
         return {
             "cost_limit_microusd": self.cost_limit_microusd,
+            "input_tokens_reserved": self.input_tokens_reserved,
             "output_tokens_reserved": self.output_tokens_reserved,
             "provider_requests": self.provider_requests,
             "runtime_processes": self.runtime_processes,
@@ -133,11 +143,19 @@ class ResourceLimits:
         return (
             self.wall_clock_seconds <= ceiling.wall_clock_seconds
             and self.provider_requests <= ceiling.provider_requests
+            and self.input_tokens_reserved <= ceiling.input_tokens_reserved
             and self.output_tokens_reserved <= ceiling.output_tokens_reserved
             and self.tool_calls <= ceiling.tool_calls
             and self.runtime_processes <= ceiling.runtime_processes
-            and self.cost_limit_microusd <= ceiling.cost_limit_microusd
+            and _optional_limit_within(self.cost_limit_microusd, ceiling.cost_limit_microusd)
         )
+
+
+def _optional_limit_within(requested: int | None, ceiling: int | None) -> bool:
+    """Compare a measurable ceiling without treating unknown cost as zero."""
+    if requested is None or ceiling is None:
+        return requested is None and ceiling is None
+    return requested <= ceiling
 
 
 @dataclass(frozen=True)
@@ -274,14 +292,20 @@ class TargetPolicy:
     network_class: NetworkClass
     billing_class: BillingClass
     request_cost_ceiling_microusd: int | None
+    data_egress_class: DataEgressClass
+    retention_acknowledged: bool
+    residual_cost_acknowledged: bool
 
     def to_payload(self) -> dict[str, Any]:
         """Return a canonical JSON-compatible representation."""
         return {
             "behavior": dict(self.behavior),
             "billing_class": self.billing_class.value,
+            "data_egress_class": self.data_egress_class.value,
             "network_class": self.network_class.value,
             "request_cost_ceiling_microusd": self.request_cost_ceiling_microusd,
+            "residual_cost_acknowledged": self.residual_cost_acknowledged,
+            "retention_acknowledged": self.retention_acknowledged,
             "target_fingerprint": self.target_fingerprint,
             "target_id": self.target_id,
             "target_type": self.target_type,
@@ -591,6 +615,7 @@ def _parse_limits(raw: Any) -> ResourceLimits:
     required = {
         "wall_clock_seconds",
         "provider_requests",
+        "input_tokens_reserved",
         "output_tokens_reserved",
         "tool_calls",
         "runtime_processes",
@@ -600,13 +625,16 @@ def _parse_limits(raw: Any) -> ResourceLimits:
     return ResourceLimits(
         wall_clock_seconds=_positive_int(payload["wall_clock_seconds"], "wall_clock_seconds"),
         provider_requests=_positive_int(payload["provider_requests"], "provider_requests"),
+        input_tokens_reserved=_positive_int(
+            payload["input_tokens_reserved"], "input_tokens_reserved"
+        ),
         output_tokens_reserved=_positive_int(
             payload["output_tokens_reserved"], "output_tokens_reserved"
         ),
         tool_calls=_positive_int(payload["tool_calls"], "tool_calls"),
         runtime_processes=_positive_int(payload["runtime_processes"], "runtime_processes"),
-        cost_limit_microusd=_bounded_int(
-            payload["cost_limit_microusd"], "cost_limit_microusd", 0, (2**63) - 1
+        cost_limit_microusd=_optional_nonnegative_int(
+            payload["cost_limit_microusd"], "cost_limit_microusd"
         ),
     )
 
@@ -645,6 +673,9 @@ def _parse_target_policy(payload: dict[str, Any]) -> TargetPolicy:
         "network_class",
         "billing_class",
         "request_cost_ceiling_microusd",
+        "data_egress_class",
+        "retention_acknowledged",
+        "residual_cost_acknowledged",
     }
     _require_shape(payload, required=required)
     target_id = _hex_id(payload["target_id"], "target_id")
@@ -655,6 +686,32 @@ def _parse_target_policy(payload: dict[str, Any]) -> TargetPolicy:
         raise ContractError("target behavior identity does not match its policy fields")
     if sha256_digest(behavior) != fingerprint:
         raise ContractError("target behavior does not match target_fingerprint")
+    network, billing, ceiling, egress, retention, residual = _parse_target_authority(payload)
+    _require_matching_behavior_authority(
+        behavior,
+        billing,
+        ceiling,
+        egress,
+        retention,
+        residual,
+    )
+    return TargetPolicy(
+        target_id,
+        fingerprint,
+        target_type,
+        behavior,
+        network,
+        billing,
+        ceiling,
+        egress,
+        retention,
+        residual,
+    )
+
+
+def _parse_target_authority(
+    payload: dict[str, Any],
+) -> tuple[NetworkClass, BillingClass, int | None, DataEgressClass, bool, bool]:
     billing = _enum_value(BillingClass, payload["billing_class"], "billing_class")
     ceiling = _optional_nonnegative_int(
         payload["request_cost_ceiling_microusd"], "request_cost_ceiling_microusd"
@@ -663,15 +720,88 @@ def _parse_target_policy(payload: dict[str, Any]) -> TargetPolicy:
         raise ContractError("metered targets require request_cost_ceiling_microusd")
     if billing != BillingClass.METERED and ceiling is not None:
         raise ContractError("only metered targets may set request_cost_ceiling_microusd")
-    return TargetPolicy(
-        target_id,
-        fingerprint,
-        target_type,
-        behavior,
-        _enum_value(NetworkClass, payload["network_class"], "network_class"),
-        billing,
-        ceiling,
-    )
+    network = _enum_value(NetworkClass, payload["network_class"], "network_class")
+    egress = _enum_value(DataEgressClass, payload["data_egress_class"], "data_egress_class")
+    retention = _boolean(payload["retention_acknowledged"], "retention_acknowledged")
+    residual = _boolean(payload["residual_cost_acknowledged"], "residual_cost_acknowledged")
+    _validate_target_acknowledgements(network, billing, egress, retention, residual)
+    return network, billing, ceiling, egress, retention, residual
+
+
+def _require_matching_behavior_authority(
+    behavior: dict[str, Any],
+    billing: BillingClass,
+    ceiling: int | None,
+    egress: DataEgressClass,
+    retention: bool,
+    residual: bool,
+) -> None:
+    expected_billing = {
+        "billing_class": billing.value,
+        "request_cost_ceiling_microusd": ceiling,
+        "residual_cost_acknowledged": residual,
+    }
+    expected_egress = {
+        "data_egress_class": egress.value,
+        "retention_acknowledged": retention,
+    }
+    if (
+        behavior.get("billing") != expected_billing
+        or behavior.get("data_egress") != expected_egress
+    ):
+        raise ContractError("target behavior authority does not match its policy fields")
+
+
+def _validate_target_acknowledgements(
+    network: NetworkClass,
+    billing: BillingClass,
+    egress: DataEgressClass,
+    retention: bool,
+    residual: bool,
+) -> None:
+    _validate_network_billing(network, billing)
+    if network == NetworkClass.LOOPBACK:
+        _validate_loopback_acknowledgements(egress, retention, residual)
+        return
+    if network == NetworkClass.EXTERNAL_RUNTIME:
+        _validate_external_acknowledgements(egress, retention, residual)
+        return
+    if egress != DataEgressClass.PACKAGED_SYNTHETIC_REMOTE:
+        raise ContractError("target data egress class does not match its network class")
+    if not retention:
+        raise ContractError("remote targets require retention acknowledgement")
+    if not residual:
+        raise ContractError("remote targets require residual-cost acknowledgement")
+
+
+def _validate_network_billing(network: NetworkClass, billing: BillingClass) -> None:
+    external = network == NetworkClass.EXTERNAL_RUNTIME
+    if external and billing != BillingClass.EXTERNAL_RUNTIME:
+        raise ContractError("external runtimes require external_runtime billing")
+    if not external and billing == BillingClass.EXTERNAL_RUNTIME:
+        raise ContractError("only external runtimes may use external_runtime billing")
+
+
+def _validate_loopback_acknowledgements(
+    egress: DataEgressClass,
+    retention: bool,
+    residual: bool,
+) -> None:
+    if egress != DataEgressClass.LOCAL_ONLY:
+        raise ContractError("loopback targets require local_only data egress")
+    if retention or residual:
+        raise ContractError("loopback targets must not declare remote acknowledgements")
+
+
+def _validate_external_acknowledgements(
+    egress: DataEgressClass,
+    retention: bool,
+    residual: bool,
+) -> None:
+    if egress != DataEgressClass.EXTERNAL_RUNTIME:
+        raise ContractError("external runtimes require external_runtime data egress")
+    if not retention or not residual:
+        raise ContractError("external runtimes require retention and residual-cost acknowledgement")
 
 
 def _parse_output_roots(raw: Any) -> tuple[OutputRootPolicy, ...]:
@@ -844,6 +974,12 @@ def _optional_nonnegative_int(raw: Any, label: str) -> int | None:
     if raw is None:
         return None
     return _bounded_int(raw, label, 0, (2**63) - 1)
+
+
+def _boolean(raw: Any, label: str) -> bool:
+    if not isinstance(raw, bool):
+        raise ContractError(f"{label} must be a boolean")
+    return raw
 
 
 def _bounded_int(raw: Any, label: str, minimum: int, maximum: int) -> int:

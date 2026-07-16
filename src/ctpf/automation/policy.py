@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from ctpf.automation.canonical import sha256_digest
 from ctpf.automation.contracts import (
@@ -21,8 +22,19 @@ from ctpf.automation.contracts import (
 from ctpf.automation.targets import ScenarioCapability, TargetIdentity
 
 _MAX_INTEGER = (2**63) - 1
-_ZERO_RESERVATIONS = ResourceLimits(1, 1, 1, 1, 1, 0)
+_ZERO_RESERVATIONS = ResourceLimits(1, 1, 1, 1, 1, 1, 0)
 _MATRIX_TARGET_TYPE = "inference"
+
+
+@dataclass
+class _ReservationTotals:
+    provider_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    runtime_processes: int = 0
+    wall_clock: int = 0
+    cost: int | None = 0
 
 
 def evaluate_policy(  # noqa: PLR0911 - explicit fail-closed guard sequence
@@ -159,7 +171,7 @@ def _validate_targets(  # noqa: PLR0911 - reason-specific guard sequence
     return None
 
 
-def _target_policy_reason(
+def _target_policy_reason(  # noqa: PLR0911 - reason-specific fail-closed checks
     fingerprint: str,
     identity: TargetIdentity,
     target_policy: TargetPolicy | None,
@@ -168,6 +180,10 @@ def _target_policy_reason(
         return "target_not_authorized"
     if target_policy.target_fingerprint != fingerprint:
         return "target_fingerprint_not_authorized"
+    if target_policy.target_type != identity.target_type:
+        return "target_type_not_authorized"
+    if target_policy.behavior != identity.behavior:
+        return "target_behavior_not_authorized"
     if target_policy.network_class != identity.network_class:
         return "target_network_class_mismatch"
     if identity.network_class == NetworkClass.EXTERNAL_RUNTIME:
@@ -206,50 +222,114 @@ def _minimum_reservations(
     identities: tuple[TargetIdentity, ...],
 ) -> tuple[ResourceLimits, tuple[str, ...], str | None]:
     sessions_per_target = capability.sessions_per_trial * spec.experiment.trials_per_target
-    sessions = sessions_per_target * len(identities)
-    provider_requests = 0
-    tokens = 0
-    runtime_processes = 0
-    runtime_wall_clock = 0
-    cost = 0
+    totals = _ReservationTotals()
     warnings: list[str] = []
     target_policies = {item.target_id: item for item in policy.targets}
     for identity in identities:
-        if identity.target_type == "inference":
-            max_tokens = identity.behavior.get("max_tokens")
-            if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
-                return _ZERO_RESERVATIONS, (), "target_max_tokens_invalid"
-            max_rounds = identity.behavior.get("max_provider_rounds")
-            if isinstance(max_rounds, bool) or not isinstance(max_rounds, int) or max_rounds < 1:
-                return _ZERO_RESERVATIONS, (), "target_max_provider_rounds_invalid"
-            target_requests = max_rounds * sessions_per_target
-            provider_requests += target_requests
-            tokens += max_tokens * target_requests
-        else:
-            process_count, wall_clock, reason = _runtime_reservations(identity, sessions_per_target)
-            if reason:
-                return _ZERO_RESERVATIONS, (), reason
-            target_requests = sessions_per_target
-            provider_requests += target_requests
-            runtime_processes += process_count
-            runtime_wall_clock += wall_clock
-            warnings.append("external runtime cost is not measured by CTPF")
-        target_policy = target_policies[identity.target_id]
-        ceiling = target_policy.request_cost_ceiling_microusd
-        if ceiling is not None:
-            cost += ceiling * target_requests
-    values = (provider_requests, tokens, runtime_processes, runtime_wall_clock, cost)
+        reason = _reserve_target(
+            totals,
+            identity,
+            target_policies[identity.target_id],
+            sessions_per_target,
+            warnings,
+        )
+        if reason:
+            return _ZERO_RESERVATIONS, (), reason
+    values = (
+        totals.provider_requests,
+        totals.input_tokens,
+        totals.output_tokens,
+        totals.tool_calls,
+        totals.runtime_processes,
+        totals.wall_clock,
+    )
     if any(value > _MAX_INTEGER for value in values):
         return _ZERO_RESERVATIONS, (), "minimum_reservation_overflow"
+    if totals.cost is not None and totals.cost > _MAX_INTEGER:
+        return _ZERO_RESERVATIONS, (), "minimum_reservation_overflow"
     reservations = ResourceLimits(
-        wall_clock_seconds=max(1, runtime_wall_clock),
-        provider_requests=max(1, provider_requests),
-        output_tokens_reserved=max(1, tokens),
-        tool_calls=max(1, sessions),
-        runtime_processes=max(1, runtime_processes),
-        cost_limit_microusd=cost,
+        wall_clock_seconds=max(1, totals.wall_clock),
+        provider_requests=max(1, totals.provider_requests),
+        input_tokens_reserved=max(1, totals.input_tokens),
+        output_tokens_reserved=max(1, totals.output_tokens),
+        tool_calls=max(1, totals.tool_calls),
+        runtime_processes=max(1, totals.runtime_processes),
+        cost_limit_microusd=totals.cost,
     )
     return reservations, tuple(sorted(set(warnings))), None
+
+
+def _reserve_target(
+    totals: _ReservationTotals,
+    identity: TargetIdentity,
+    target_policy: TargetPolicy,
+    sessions_per_target: int,
+    warnings: list[str],
+) -> str | None:
+    if identity.target_type == "inference":
+        values, reason = _inference_reservations(identity, sessions_per_target)
+        if reason:
+            return reason
+        requests, input_tokens, output_tokens, tools, wall_clock = values
+        totals.input_tokens += input_tokens
+        totals.output_tokens += output_tokens
+        totals.tool_calls += tools
+    else:
+        processes, wall_clock, reason = _runtime_reservations(identity, sessions_per_target)
+        if reason:
+            return reason
+        requests = sessions_per_target
+        totals.runtime_processes += processes
+        totals.tool_calls += sessions_per_target
+        totals.cost = None
+        warnings.append("external runtime residual cost is acknowledged but not measurable")
+    totals.provider_requests += requests
+    totals.wall_clock += wall_clock
+    ceiling = target_policy.request_cost_ceiling_microusd
+    if ceiling is not None and totals.cost is not None:
+        totals.cost += ceiling * requests
+    return None
+
+
+def _inference_reservations(
+    identity: TargetIdentity,
+    sessions_per_target: int,
+) -> tuple[tuple[int, int, int, int, int], str | None]:
+    limits = identity.behavior.get("limits")
+    transport = identity.behavior.get("transport")
+    if not isinstance(limits, dict) or not isinstance(transport, dict):
+        return (0, 0, 0, 0, 0), "target_inference_authority_invalid"
+    max_rounds = _positive_mapping_int(limits, "max_provider_rounds")
+    max_input = _positive_mapping_int(limits, "max_input_tokens")
+    max_output = _positive_mapping_int(limits, "max_output_tokens")
+    max_tools = _positive_mapping_int(limits, "max_tool_calls_per_session")
+    attempts = _positive_mapping_int(transport, "max_attempts")
+    deadlines = transport.get("deadlines_seconds")
+    overall = _positive_mapping_int(deadlines, "overall") if isinstance(deadlines, dict) else None
+    if (
+        max_rounds is None
+        or max_input is None
+        or max_output is None
+        or max_tools is None
+        or attempts is None
+        or overall is None
+    ):
+        return (0, 0, 0, 0, 0), "target_inference_authority_invalid"
+    requests = max_rounds * attempts * sessions_per_target
+    return (
+        requests,
+        max_input * requests,
+        max_output * requests,
+        max_tools * sessions_per_target,
+        overall * requests,
+    ), None
+
+
+def _positive_mapping_int(mapping: dict[str, object], key: str) -> int | None:
+    value = mapping.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def _runtime_reservations(

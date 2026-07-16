@@ -21,6 +21,7 @@ from mcp.types import (
 from typer.testing import CliRunner
 
 from ctpf import experiment
+from ctpf.automation.contracts import DataEgressClass
 from ctpf.cli import app as root_app
 from ctpf.driven_inference import OpenAICompatibleTargetProfile
 from ctpf.external_runtime import ClaudeCodeTargetProfile
@@ -546,6 +547,10 @@ class TestSeriesCompletion:
             model="model-a",
             credential_name="remote-a",
             temperature=0.0,
+            max_input_tokens=1_024,
+            data_egress_class=DataEgressClass.PACKAGED_SYNTHETIC_REMOTE,
+            retention_acknowledged=True,
+            residual_cost_acknowledged=True,
         )
         (series_root / experiment._TARGET_PROFILE_NAME).write_text(
             json.dumps(profile.evidence_payload()),
