@@ -10,10 +10,13 @@ import pytest
 from ctpf.core.config import (
     _KEYRING_SERVICE,
     delete_credential,
+    delete_local_secret,
     get_credential,
     get_keyring_credential,
+    get_local_secret,
     import_legacy_credentials,
     set_credential,
+    set_local_secret,
 )
 
 
@@ -99,6 +102,35 @@ class TestDeleteCredential:
             mock_kr.errors = keyring.errors
             mock_kr.delete_password.side_effect = keyring.errors.PasswordDeleteError()
             delete_credential("nonexistent")  # Should not raise
+
+
+class TestLocalSecretNamespace:
+    """Internal signing material cannot collide with provider credentials."""
+
+    def test_round_trip_uses_reserved_account(self) -> None:
+        """Internal secrets share the secure backend but use an isolated account."""
+        with patch("ctpf.core.config.keyring") as mock_kr:
+            mock_kr.get_password.return_value = "encoded-secret"
+            set_local_secret("automation-approval-key-v1", "encoded-secret")
+            result = get_local_secret("automation-approval-key-v1")
+            delete_local_secret("automation-approval-key-v1")
+
+        account = "__ctpf_local_secret__:automation-approval-key-v1"
+        mock_kr.set_password.assert_called_once_with(_KEYRING_SERVICE, account, "encoded-secret")
+        mock_kr.get_password.assert_called_once_with(_KEYRING_SERVICE, account)
+        mock_kr.delete_password.assert_called_once_with(_KEYRING_SERVICE, account)
+        assert result == "encoded-secret"
+
+    def test_provider_api_cannot_access_reserved_namespace(self) -> None:
+        """The public credential API rejects internal keyring account aliases."""
+        with pytest.raises(ValueError, match="reserved"):
+            get_keyring_credential("__ctpf_local_secret__:automation-approval-key-v1")
+
+    @pytest.mark.parametrize("name", ["", "contains spaces", "../escape"])
+    def test_local_secret_names_are_bounded_safe_identifiers(self, name: str) -> None:
+        """Internal account names cannot escape or alias the namespace."""
+        with pytest.raises(ValueError, match="safe"):
+            get_local_secret(name)
 
 
 class TestInsecureBackendGuard:

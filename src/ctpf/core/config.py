@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -21,6 +22,8 @@ import yaml
 _DEFAULT_CONFIG_PATH = Path.home() / ".ctpf" / "config.yaml"
 
 _KEYRING_SERVICE = "ctpf"
+_LOCAL_SECRET_PREFIX = "__ctpf_local_secret__:"  # noqa: S105 - keyring namespace
+_LOCAL_SECRET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
 def load_config(config_path: Path | None = None) -> dict:
@@ -68,7 +71,7 @@ def get_keyring_credential(provider: str) -> str | None:
     Returns:
         API key string or None if the keyring has no matching entry.
     """
-    provider = provider.strip().lower()
+    provider = _provider_account(provider)
     _assert_secure_keyring()
     result: str | None = keyring.get_password(_KEYRING_SERVICE, provider)
     return result
@@ -81,7 +84,7 @@ def set_credential(provider: str, api_key: str) -> None:
         provider: Provider name.
         api_key: The API key to store.
     """
-    provider = provider.strip().lower()
+    provider = _provider_account(provider)
     _assert_secure_keyring()
     keyring.set_password(_KEYRING_SERVICE, provider, api_key)
 
@@ -92,10 +95,67 @@ def delete_credential(provider: str) -> None:
     Args:
         provider: Provider name.
     """
-    provider = provider.strip().lower()
+    provider = _provider_account(provider)
     _assert_secure_keyring()
     with contextlib.suppress(keyring.errors.PasswordDeleteError):
         keyring.delete_password(_KEYRING_SERVICE, provider)
+
+
+def get_local_secret(name: str) -> str | None:
+    """Read a CTPF-internal secret from its reserved OS-keyring namespace.
+
+    Args:
+        name: Stable internal secret name, not a provider credential alias.
+
+    Returns:
+        Secret value or None if no matching entry exists.
+    """
+    account = _local_secret_account(name)
+    _assert_secure_keyring()
+    result: str | None = keyring.get_password(_KEYRING_SERVICE, account)
+    return result
+
+
+def set_local_secret(name: str, value: str) -> None:
+    """Store a CTPF-internal secret in the reserved OS-keyring namespace.
+
+    Args:
+        name: Stable internal secret name.
+        value: Non-empty secret value.
+    """
+    if not value:
+        raise ValueError("local secret value must not be empty")
+    account = _local_secret_account(name)
+    _assert_secure_keyring()
+    keyring.set_password(_KEYRING_SERVICE, account, value)
+
+
+def delete_local_secret(name: str) -> None:
+    """Delete a CTPF-internal secret from the reserved keyring namespace.
+
+    Args:
+        name: Stable internal secret name.
+    """
+    account = _local_secret_account(name)
+    _assert_secure_keyring()
+    with contextlib.suppress(keyring.errors.PasswordDeleteError):
+        keyring.delete_password(_KEYRING_SERVICE, account)
+
+
+def _provider_account(provider: str) -> str:
+    account = provider.strip().lower()
+    if not account:
+        raise ValueError("provider credential name must not be empty")
+    if account.startswith(_LOCAL_SECRET_PREFIX):
+        raise ValueError("provider credential name uses a reserved namespace")
+    return account
+
+
+def _local_secret_account(name: str) -> str:
+    normalized = name.strip().lower()
+    if not _LOCAL_SECRET_NAME.fullmatch(normalized):
+        raise ValueError("local secret name must be a safe 1-64 character identifier")
+    return f"{_LOCAL_SECRET_PREFIX}{normalized}"
 
 
 def _assert_secure_keyring() -> None:

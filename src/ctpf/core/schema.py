@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_VERSION = 14
+CURRENT_VERSION = 15
 
 V1_TABLES = """
 CREATE TABLE IF NOT EXISTS targets (
@@ -247,6 +247,95 @@ CREATE INDEX IF NOT EXISTS idx_rxp_validations_model_id ON rxp_validations(model
 """
 
 
+V15_TABLES = """
+CREATE TABLE IF NOT EXISTS automation_policies (
+    id TEXT PRIMARY KEY,
+    policy_json TEXT NOT NULL,
+    policy_digest TEXT NOT NULL UNIQUE,
+    signature TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS automation_grants (
+    id TEXT PRIMARY KEY,
+    grant_json TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    spec_digest TEXT NOT NULL,
+    policy_id TEXT NOT NULL REFERENCES automation_policies(id),
+    policy_digest TEXT NOT NULL,
+    scenario_fingerprint TEXT NOT NULL,
+    target_fingerprints TEXT NOT NULL,
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    bound_run_id TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    spec_json TEXT NOT NULL,
+    spec_digest TEXT NOT NULL,
+    policy_id TEXT NOT NULL REFERENCES automation_policies(id),
+    policy_digest TEXT NOT NULL,
+    grant_id TEXT NOT NULL REFERENCES automation_grants(id),
+    state TEXT NOT NULL CHECK (
+        state IN (
+            'READY', 'RUNNING', 'CANCEL_REQUESTED', 'COMPLETED',
+            'FAILED', 'CANCELLED', 'INTERRUPTED'
+        )
+    ),
+    scenario_fingerprint TEXT NOT NULL,
+    target_fingerprints TEXT NOT NULL,
+    output_root_id TEXT NOT NULL,
+    run_root TEXT,
+    manifest_path TEXT,
+    budget_json TEXT NOT NULL,
+    usage_json TEXT NOT NULL,
+    result_json TEXT,
+    error_json TEXT,
+    lease_id TEXT,
+    lease_heartbeat_at TEXT,
+    cancel_requested_at TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS automation_events (
+    run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, sequence)
+);
+"""
+
+V15_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_automation_policies_status
+    ON automation_policies(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_automation_grants_spec_digest
+    ON automation_grants(spec_digest);
+CREATE INDEX IF NOT EXISTS idx_automation_grants_expires_at
+    ON automation_grants(expires_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_state
+    ON automation_runs(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_policy_id
+    ON automation_runs(policy_id);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_grant_id
+    ON automation_runs(grant_id);
+CREATE INDEX IF NOT EXISTS idx_automation_events_run_id
+    ON automation_events(run_id, sequence);
+"""
+
+
 def _migrate_v9(conn: sqlite3.Connection) -> None:
     """V9: Add mitigation column to findings table.
 
@@ -367,6 +456,13 @@ def _migrate_v14(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA user_version = 14")
 
 
+def _migrate_v15(conn: sqlite3.Connection) -> None:
+    """V15: Add isolated policy and lifecycle tables for governed automation."""
+    conn.executescript(V15_TABLES)
+    conn.executescript(V15_INDEXES)
+    conn.execute("PRAGMA user_version = 15")
+
+
 def migrate(conn: sqlite3.Connection) -> None:  # noqa: C901, PLR0912
     """Run schema migrations up to CURRENT_VERSION.
 
@@ -385,6 +481,7 @@ def migrate(conn: sqlite3.Connection) -> None:  # noqa: C901, PLR0912
     Version 12 adds chain correlation columns to proxy_sessions table.
     Version 13 adds template_id column to ipi_payloads for per-run provenance.
     Version 14 adds via_tunnel column to ipi_hits for forwarded-header provenance.
+    Version 15 adds isolated governed-automation policy and lifecycle tables.
     """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < 1:
@@ -432,3 +529,5 @@ def migrate(conn: sqlite3.Connection) -> None:  # noqa: C901, PLR0912
         _migrate_v13(conn)
     if version < 14:
         _migrate_v14(conn)
+    if version < 15:
+        _migrate_v15(conn)

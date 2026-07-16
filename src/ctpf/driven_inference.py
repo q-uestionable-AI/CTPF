@@ -17,7 +17,7 @@ from ctpf.services.db_service import resolve_partial_id
 
 _DRIVER_NAME = "openai-compatible"
 _DEFAULT_MAX_TOKENS = 1024
-_DEFAULT_MAX_ROUNDS = 12
+DEFAULT_MAX_ROUNDS = 12
 _MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 _REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 
@@ -237,7 +237,7 @@ class OpenAICompatibleDriver:
         profile: OpenAICompatibleTargetProfile,
         *,
         client: ProviderClient | None = None,
-        max_rounds: int = _DEFAULT_MAX_ROUNDS,
+        max_rounds: int = DEFAULT_MAX_ROUNDS,
     ) -> None:
         """Configure the driver with a profile and optional test client."""
         if max_rounds < 1:

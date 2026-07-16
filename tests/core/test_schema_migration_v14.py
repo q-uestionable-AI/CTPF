@@ -19,9 +19,9 @@ from ctpf.core.schema import (
 class TestSchemaV14:
     """Schema V14 adds a non-null boolean via_tunnel column to ipi_hits."""
 
-    def test_current_version_is_14(self) -> None:
-        """CURRENT_VERSION reflects the V14 bump."""
-        assert CURRENT_VERSION == 14
+    def test_current_version_includes_v14(self) -> None:
+        """The latest schema remains newer than the preserved V14 migration."""
+        assert CURRENT_VERSION >= 14
 
     def test_fresh_db_has_via_tunnel_column(self, tmp_path: Path) -> None:
         """A freshly migrated database exposes via_tunnel on ipi_hits with
@@ -41,12 +41,12 @@ class TestSchemaV14:
             assert str(col_info["via_tunnel"][4]) == "0", "via_tunnel default must be 0"
 
     def test_user_version_after_migrate(self, tmp_path: Path) -> None:
-        """migrate() advances user_version to CURRENT_VERSION (14)."""
+        """migrate() advances user_version to the current schema."""
         db_path = tmp_path / "test.db"
         with sqlite3.connect(str(db_path)) as conn:
             migrate(conn)
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert version == 14
+            assert version == CURRENT_VERSION
 
     def test_v14_on_existing_v14_db_is_noop(self, tmp_path: Path) -> None:
         """Re-running _migrate_v14 on an already-migrated DB is idempotent."""
@@ -170,6 +170,6 @@ class TestSchemaV14:
             migrate(conn)
 
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            assert version == 14
+            assert version == CURRENT_VERSION
             cols = {row[1] for row in conn.execute("PRAGMA table_info(ipi_hits)").fetchall()}
             assert "via_tunnel" in cols
