@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 from ctpf.automation.contracts import BillingClass, DataEgressClass
 from ctpf.core.config import get_keyring_credential
@@ -28,6 +28,25 @@ _AuthorityEnumT = TypeVar("_AuthorityEnumT", BillingClass, DataEgressClass)
 
 class DrivenInferenceError(RuntimeError):
     """Raised when driven inference cannot preserve experiment integrity."""
+
+
+class InferenceControl(Protocol):
+    """Narrow governed inference boundary used without coupling the driver."""
+
+    @property
+    def expected_tool_names(self) -> frozenset[str]: ...
+
+    def reserve(self, boundary: str, **reservation: int) -> dict[str, Any]: ...
+
+    def record_provider_usage(
+        self,
+        *,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+    ) -> dict[str, Any]: ...
+
+    async def wait(self, awaitable: Any, boundary: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -354,6 +373,7 @@ class OpenAICompatibleDriver:
         *,
         client: ProviderClient | None = None,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
+        control: InferenceControl | None = None,
     ) -> None:
         """Configure the driver with a profile and optional test client."""
         if max_rounds < 1:
@@ -361,6 +381,7 @@ class OpenAICompatibleDriver:
         self._profile = profile
         self._client = client
         self._max_rounds = max_rounds
+        self._control = control
 
     async def run(
         self,
@@ -430,7 +451,8 @@ class OpenAICompatibleDriver:
             timeout=_MCP_CONNECT_TIMEOUT_SECONDS,
         ) as connection:
             listed = await connection.session.list_tools()
-            tools, schemas = _tool_specs(listed)
+            expected = self._control.expected_tool_names if self._control is not None else None
+            tools, schemas = _tool_specs(listed, expected)
             transcript["tool_schemas"] = schemas
             _write_json(transcript_path, transcript)
             messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
@@ -457,12 +479,7 @@ class OpenAICompatibleDriver:
             record = {"index": index + 1, "request": self._request_payload(messages, tools)}
             transcript["rounds"].append(record)
             _write_json(transcript_path, transcript)
-            response = await client.complete(
-                self._profile.model,
-                messages,
-                tools,
-                max_tokens=self._profile.max_tokens,
-            )
+            response = await self._complete(client, messages, tools)
             record["response"] = _response_payload(response)
             messages.append(_assistant_message(response))
             if not response.tool_calls:
@@ -479,6 +496,44 @@ class OpenAICompatibleDriver:
             record["tool_results"] = results
             _write_json(transcript_path, transcript)
         raise DrivenInferenceError(f"model exceeded the {self._max_rounds}-round tool-loop limit")
+
+    async def _complete(
+        self,
+        client: ProviderClient,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec],
+    ) -> NormalizedResponse:
+        if self._control is None:
+            return await client.complete(
+                self._profile.model,
+                messages,
+                tools,
+                max_tokens=self._profile.max_tokens,
+            )
+        self._control.reserve(
+            "provider_request",
+            cost_microusd=self._profile.request_cost_ceiling_microusd or 0,
+            input_tokens_reserved=self._profile.max_input_tokens,
+            output_tokens_reserved=self._profile.max_tokens,
+            provider_requests=1,
+        )
+        completion = client.complete(
+            self._profile.model,
+            messages,
+            tools,
+            max_tokens=self._profile.max_tokens,
+        )
+        response = cast(
+            NormalizedResponse,
+            await self._control.wait(completion, "provider_request"),
+        )
+        _validate_reported_usage(response, self._profile)
+        self._control.record_provider_usage(
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            total_tokens=response.total_tokens,
+        )
+        return response
 
     def _request_payload(
         self,
@@ -511,7 +566,10 @@ def _new_transcript(
     }
 
 
-def _tool_specs(listed: Any) -> tuple[list[ToolSpec], list[dict[str, Any]]]:
+def _tool_specs(
+    listed: Any,
+    expected_names: frozenset[str] | None = None,
+) -> tuple[list[ToolSpec], list[dict[str, Any]]]:
     raw_tools = getattr(listed, "tools", None)
     if not isinstance(raw_tools, list) or not raw_tools:
         raise DrivenInferenceError("proxied MCP server returned no tool schemas")
@@ -528,7 +586,19 @@ def _tool_specs(listed: Any) -> tuple[list[ToolSpec], list[dict[str, Any]]]:
         if not isinstance(dumped, dict):
             raise DrivenInferenceError("proxied MCP tool schema did not serialize to an object")
         schemas.append(_evidence_value(dumped))
+    if expected_names is not None and {spec.name for spec in specs} != expected_names:
+        raise DrivenInferenceError("proxied MCP tool schemas differ from the scenario allowlist")
     return specs, schemas
+
+
+def _validate_reported_usage(
+    response: NormalizedResponse,
+    profile: OpenAICompatibleTargetProfile,
+) -> None:
+    if response.input_tokens is not None and response.input_tokens > profile.max_input_tokens:
+        raise DrivenInferenceError("provider reported input usage above the approved ceiling")
+    if response.output_tokens is not None and response.output_tokens > profile.max_tokens:
+        raise DrivenInferenceError("provider reported output usage above the approved ceiling")
 
 
 async def _execute_tool_calls(

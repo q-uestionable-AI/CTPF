@@ -8,7 +8,7 @@ import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ctpf.automation.approval import (
     ApprovalError,
@@ -53,6 +53,20 @@ _TRANSITIONS = {
         AutomationRunState.INTERRUPTED,
     },
 }
+_BUDGET_COUNTERS = frozenset(
+    {
+        "cost_microusd",
+        "input_tokens_reserved",
+        "output_tokens_reserved",
+        "provider_requests",
+        "runtime_processes",
+        "tool_calls",
+    }
+)
+_RUNNING_STATES = (
+    AutomationRunState.RUNNING.value,
+    AutomationRunState.CANCEL_REQUESTED.value,
+)
 
 
 class AutomationStoreError(RuntimeError):
@@ -424,6 +438,273 @@ def transition_run_state(
         return run
 
 
+def claim_run_execution(  # noqa: PLR0913 - exact lifecycle claim fields
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    lease_id: str,
+    run_root: str,
+    manifest_path: str,
+    deadline_at: str,
+    concurrent_runs: int,
+    stale_before: str,
+    now: str | None = None,
+) -> AutomationRunRecord:
+    """Atomically interrupt stale workers and claim one READY run."""
+    timestamp = now or utc_now()
+    conn.execute("SAVEPOINT automation_claim")
+    try:
+        _interrupt_stale_runs(conn, stale_before, timestamp)
+        active = conn.execute(
+            "SELECT COUNT(*) FROM automation_runs WHERE state IN (?, ?)",
+            _RUNNING_STATES,
+        ).fetchone()[0]
+        _require_concurrency(int(active), concurrent_runs)
+        result = conn.execute(
+            """
+            UPDATE automation_runs SET
+                state = ?, run_root = ?, manifest_path = ?, lease_id = ?,
+                lease_heartbeat_at = ?, started_at = ?, updated_at = ?
+            WHERE id = ? AND state = ? AND lease_id IS NULL
+            """,
+            (
+                AutomationRunState.RUNNING.value,
+                run_root,
+                manifest_path,
+                lease_id,
+                timestamp,
+                timestamp,
+                timestamp,
+                run_id,
+                AutomationRunState.READY.value,
+            ),
+        )
+        _require_changed(result, "automation run is not claimable")
+        _append_event_unchecked(
+            conn,
+            run_id,
+            "state_running",
+            {"deadline_at": deadline_at, "lease_id": lease_id},
+            created_at=timestamp,
+        )
+        run = _require_run(get_automation_run(conn, run_id), "claimed")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT automation_claim")
+        conn.execute("RELEASE SAVEPOINT automation_claim")
+        raise
+    conn.execute("RELEASE SAVEPOINT automation_claim")
+    return run
+
+
+def heartbeat_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_id: str,
+    *,
+    now: str | None = None,
+) -> bool:
+    """Refresh a live lease without creating unbounded heartbeat events."""
+    timestamp = now or utc_now()
+    result = conn.execute(
+        """
+        UPDATE automation_runs SET lease_heartbeat_at = ?, updated_at = ?
+        WHERE id = ? AND lease_id = ? AND state IN (?, ?)
+        """,
+        (timestamp, timestamp, run_id, lease_id, *_RUNNING_STATES),
+    )
+    return result.rowcount == 1
+
+
+def reconcile_stale_runs(
+    conn: sqlite3.Connection,
+    *,
+    stale_before: str,
+    now: str | None = None,
+) -> None:
+    """Durably mark every expired live lease as interrupted."""
+    _interrupt_stale_runs(conn, stale_before, now or utc_now())
+
+
+def reserve_run_budget(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_id: str,
+    reservation: dict[str, int],
+    *,
+    boundary: str,
+) -> dict[str, Any]:
+    """Transactionally consume non-refundable authority before one boundary."""
+    if not reservation or set(reservation).difference(_BUDGET_COUNTERS):
+        raise AutomationStoreError("budget reservation contains unsupported counters")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in reservation.values()
+    ):
+        raise AutomationStoreError("budget reservation counters must be nonnegative integers")
+    conn.execute("SAVEPOINT automation_reserve")
+    try:
+        row = _owned_running_row(conn, run_id, lease_id)
+        budget = _stored_mapping(row["budget_json"], "budget")
+        usage = _stored_mapping(row["usage_json"], "usage")
+        updated = _reserved_usage(budget, usage, reservation)
+        timestamp = utc_now()
+        result = conn.execute(
+            """
+            UPDATE automation_runs SET usage_json = ?, updated_at = ?
+            WHERE id = ? AND lease_id = ? AND state = ? AND usage_json = ?
+            """,
+            (
+                canonical_json(updated),
+                timestamp,
+                run_id,
+                lease_id,
+                AutomationRunState.RUNNING.value,
+                row["usage_json"],
+            ),
+        )
+        _require_changed(result, "automation usage changed concurrently")
+        _append_event_unchecked(
+            conn,
+            run_id,
+            "budget_reserved",
+            {"boundary": boundary, "reservation": reservation, "usage": updated},
+            created_at=timestamp,
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT automation_reserve")
+        conn.execute("RELEASE SAVEPOINT automation_reserve")
+        raise
+    conn.execute("RELEASE SAVEPOINT automation_reserve")
+    return updated
+
+
+def record_provider_usage(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_id: str,
+    usage: dict[str, int],
+) -> dict[str, Any]:
+    """Durably add validated provider-reported usage as non-authoritative evidence."""
+    allowed = {"input_tokens_reported", "output_tokens_reported", "total_tokens_reported"}
+    if set(usage).difference(allowed):
+        raise AutomationStoreError("provider usage contains unsupported counters")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in usage.values()
+    ):
+        raise AutomationStoreError("provider usage counters must be nonnegative integers")
+    row = _owned_running_row(conn, run_id, lease_id)
+    current = _stored_mapping(row["usage_json"], "usage")
+    for key, value in usage.items():
+        stored = current.get(key, 0)
+        if isinstance(stored, bool) or not isinstance(stored, int) or stored < 0:
+            raise AutomationStoreError("stored provider usage is malformed")
+        current[key] = stored + value
+    timestamp = utc_now()
+    result = conn.execute(
+        """
+        UPDATE automation_runs SET usage_json = ?, updated_at = ?
+        WHERE id = ? AND lease_id = ? AND state = ? AND usage_json = ?
+        """,
+        (
+            canonical_json(current),
+            timestamp,
+            run_id,
+            lease_id,
+            AutomationRunState.RUNNING.value,
+            row["usage_json"],
+        ),
+    )
+    if result.rowcount != 1:
+        raise AutomationStoreError("automation usage changed concurrently")
+    _append_event_unchecked(
+        conn,
+        run_id,
+        "provider_usage_recorded",
+        {"reported": usage, "usage": current},
+        created_at=timestamp,
+    )
+    return current
+
+
+def finish_run_execution(  # noqa: PLR0913 - exact terminal persistence fields
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_id: str,
+    target: AutomationRunState,
+    *,
+    result_payload: dict[str, Any] | None = None,
+    error_payload: dict[str, Any] | None = None,
+    manifest_path: str | None = None,
+) -> AutomationRunRecord:
+    """Atomically persist one terminal result owned by the live lease."""
+    if target not in _TERMINAL_STATES:
+        raise AutomationStoreError("execution target state must be terminal")
+    timestamp = utc_now()
+    values = (
+        target.value,
+        canonical_json(result_payload) if result_payload is not None else None,
+        canonical_json(error_payload) if error_payload is not None else None,
+        manifest_path,
+        timestamp,
+        timestamp,
+        run_id,
+        lease_id,
+    )
+    if target == AutomationRunState.COMPLETED:
+        result = conn.execute(
+            """
+            UPDATE automation_runs SET
+                state = ?, result_json = ?, error_json = ?,
+                manifest_path = COALESCE(?, manifest_path), updated_at = ?, finished_at = ?
+            WHERE id = ? AND lease_id = ? AND state = ?
+            """,
+            (*values, AutomationRunState.RUNNING.value),
+        )
+    else:
+        result = conn.execute(
+            """
+            UPDATE automation_runs SET
+                state = ?, result_json = ?, error_json = ?,
+                manifest_path = COALESCE(?, manifest_path), updated_at = ?, finished_at = ?
+            WHERE id = ? AND lease_id = ? AND state IN (?, ?)
+            """,
+            (*values, *_RUNNING_STATES),
+        )
+    if result.rowcount != 1:
+        raise AutomationStoreError("automation run could not enter its terminal state")
+    _append_event_unchecked(
+        conn,
+        run_id,
+        f"state_{target.value.lower()}",
+        {"error": error_payload, "result": result_payload},
+        created_at=timestamp,
+    )
+    run = get_automation_run(conn, run_id)
+    if run is None:
+        raise AutomationStoreError("terminal automation run could not be reloaded")
+    return run
+
+
+def _require_concurrency(active: int, ceiling: int) -> None:
+    if active >= ceiling:
+        raise AutomationStoreError("automation concurrency budget is exhausted")
+
+
+def _require_changed(result: sqlite3.Cursor, message: str) -> None:
+    if result.rowcount != 1:
+        raise AutomationStoreError(message)
+
+
+def _require_run(
+    run: AutomationRunRecord | None,
+    operation: str,
+) -> AutomationRunRecord:
+    if run is None:
+        raise AutomationStoreError(f"{operation} automation run could not be reloaded")
+    return run
+
+
 def _transition_and_record(
     conn: sqlite3.Connection,
     run_id: str,
@@ -469,6 +750,92 @@ def _transition_and_record(
     return run
 
 
+def _interrupt_stale_runs(conn: sqlite3.Connection, stale_before: str, now: str) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, state FROM automation_runs
+        WHERE state IN (?, ?)
+          AND (lease_heartbeat_at IS NULL OR lease_heartbeat_at < ?)
+        """,
+        (*_RUNNING_STATES, stale_before),
+    ).fetchall()
+    for row in rows:
+        result = conn.execute(
+            """
+            UPDATE automation_runs SET state = ?, updated_at = ?, finished_at = ?
+            WHERE id = ? AND state = ?
+            """,
+            (
+                AutomationRunState.INTERRUPTED.value,
+                now,
+                now,
+                row["id"],
+                row["state"],
+            ),
+        )
+        if result.rowcount != 1:
+            continue
+        _append_event_unchecked(
+            conn,
+            row["id"],
+            "state_interrupted",
+            {"reason": "lease_heartbeat_expired"},
+            created_at=now,
+        )
+
+
+def _owned_running_row(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_id: str,
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT budget_json, usage_json FROM automation_runs
+        WHERE id = ? AND lease_id = ? AND state = ?
+        """,
+        (run_id, lease_id, AutomationRunState.RUNNING.value),
+    ).fetchone()
+    if row is None:
+        raise AutomationStoreError("automation run is cancelled, unowned, or not running")
+    return cast(sqlite3.Row, row)
+
+
+def _stored_mapping(raw: str, label: str) -> dict[str, Any]:
+    try:
+        return load_canonical_object(raw)
+    except CanonicalizationError as exc:
+        raise AutomationStoreError(f"stored automation {label} is malformed") from exc
+
+
+def _reserved_usage(
+    budget: dict[str, Any],
+    usage: dict[str, Any],
+    reservation: dict[str, int],
+) -> dict[str, Any]:
+    updated = dict(usage)
+    for key, increment in reservation.items():
+        ceiling = budget.get("cost_limit_microusd" if key == "cost_microusd" else key)
+        current = usage.get(key)
+        if ceiling is None:
+            if key != "cost_microusd" or current is not None or increment != 0:
+                raise AutomationStoreError(f"automation budget {key} is not measurable")
+            continue
+        if (
+            isinstance(ceiling, bool)
+            or not isinstance(ceiling, int)
+            or ceiling < 0
+            or isinstance(current, bool)
+            or not isinstance(current, int)
+            or current < 0
+        ):
+            raise AutomationStoreError(f"stored automation budget {key} is malformed")
+        if current + increment > ceiling:
+            raise AutomationStoreError(f"automation budget {key} is exhausted")
+        updated[key] = current + increment
+    return updated
+
+
 def _insert_ready_run(
     conn: sqlite3.Connection,
     run_id: str,
@@ -483,10 +850,14 @@ def _insert_ready_run(
     )
     usage_json = canonical_json(
         {
-            "cost_microusd": 0,
+            "cost_microusd": 0 if spec.limits.cost_limit_microusd is not None else None,
+            "input_tokens_reported": 0,
+            "input_tokens_reserved": 0,
             "output_tokens_reserved": 0,
+            "output_tokens_reported": 0,
             "provider_requests": 0,
             "runtime_processes": 0,
+            "total_tokens_reported": 0,
             "tool_calls": 0,
         }
     )

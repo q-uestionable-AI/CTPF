@@ -93,6 +93,30 @@ class _FakeProviderClient:
         return self.responses.pop(0)
 
 
+class _FakeInferenceControl:
+    def __init__(self, expected_tool_names: frozenset[str]) -> None:
+        self.expected_tool_names = expected_tool_names
+        self.events: list[tuple[str, object]] = []
+
+    def reserve(self, boundary: str, **reservation: int) -> dict[str, Any]:
+        self.events.append(("reserve", {"boundary": boundary, **reservation}))
+        return {}
+
+    def record_provider_usage(
+        self,
+        *,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+    ) -> dict[str, Any]:
+        self.events.append(("usage", (input_tokens, output_tokens, total_tokens)))
+        return {}
+
+    async def wait(self, awaitable: Any, boundary: str) -> Any:
+        self.events.append(("wait", boundary))
+        return await awaitable
+
+
 def _profile() -> OpenAICompatibleTargetProfile:
     return OpenAICompatibleTargetProfile(
         target_id="1234567890abcdef",
@@ -260,6 +284,68 @@ class TestOpenAICompatibleDriver:
         assert transcript["target_profile"]["generation_parameters"]["reasoning_effort"] == "none"
         assert transcript["rounds"][0]["tool_results"][0]["name"] == "read_inbox"
         assert "credential" not in json.dumps(transcript).lower().replace("credential_name", "")
+
+    async def test_governed_driver_reserves_before_provider_and_records_usage(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        session = _FakeSession()
+        _patch_connection(monkeypatch, session)
+        client = _FakeProviderClient(
+            [
+                NormalizedResponse(
+                    content="Done.",
+                    finish_reason="stop",
+                    requested_model="research-model-1",
+                    input_tokens=11,
+                    output_tokens=4,
+                    total_tokens=15,
+                )
+            ]
+        )
+        control = _FakeInferenceControl(frozenset({"read_inbox", "write_memo"}))
+
+        await OpenAICompatibleDriver(_profile(), client=client, control=control).run(
+            "Inspect the inbox.",
+            "http://127.0.0.1:8765/mcp/",
+            tmp_path / "governed.inference.json",
+        )
+
+        assert control.events == [
+            (
+                "reserve",
+                {
+                    "boundary": "provider_request",
+                    "cost_microusd": 0,
+                    "input_tokens_reserved": 1_024,
+                    "output_tokens_reserved": 321,
+                    "provider_requests": 1,
+                },
+            ),
+            ("wait", "provider_request"),
+            ("usage", (11, 4, 15)),
+        ]
+        assert len(client.requests) == 1
+
+    async def test_governed_driver_rejects_unexpected_tools_before_provider(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _patch_connection(monkeypatch, _FakeSession())
+        client = _FakeProviderClient([])
+        control = _FakeInferenceControl(frozenset({"read_inbox"}))
+
+        with pytest.raises(DrivenInferenceError, match="scenario allowlist"):
+            await OpenAICompatibleDriver(_profile(), client=client, control=control).run(
+                "Inspect the inbox.",
+                "http://127.0.0.1:8765/mcp/",
+                tmp_path / "unexpected-tools.inference.json",
+            )
+
+        assert client.requests == []
+        assert control.events == []
 
     async def test_missing_tool_call_id_fails_and_preserves_diagnostics(
         self,

@@ -163,6 +163,52 @@ def test_external_runtime_target_identity_pins_inspected_runtime(
     assert "credential" not in str(identity.to_payload()).lower()
 
 
+def test_authenticated_snapshots_reconstruct_fingerprint_equivalent_profiles(
+    tmp_path: Path,
+) -> None:
+    """Isolated workers derive both adapter profiles without broadening signed identity."""
+    executable = tmp_path / "claude.exe"
+    executable.write_bytes(b"synthetic executable content")
+    profiles = (
+        driven_inference.OpenAICompatibleTargetProfile(
+            target_id="a" * 32,
+            name="local inference",
+            endpoint="http://127.0.0.1:11434/v1",
+            model="model-a",
+            credential_name="local-a",
+            max_tokens=256,
+            max_input_tokens=512,
+        ),
+        external_runtime.ClaudeCodeTargetProfile(
+            target_id="b" * 32,
+            name="runtime",
+            executable=str(executable),
+            model="claude-test-model",
+            runtime_version="2.1.121 (Claude Code)",
+            timeout_seconds=90,
+            retention_acknowledged=True,
+            residual_cost_acknowledged=True,
+        ),
+    )
+
+    for profile in profiles:
+        identity = target_identity_from_profile(profile)
+        policy_target = TargetPolicy(
+            identity.target_id,
+            identity.fingerprint,
+            identity.target_type,
+            identity.behavior,
+            identity.network_class,
+            profile.billing_class,
+            getattr(profile, "request_cost_ceiling_microusd", None),
+            profile.data_egress_class,
+            profile.retention_acknowledged,
+            profile.residual_cost_acknowledged,
+        )
+        reconstructed = targets.execution_profile_from_policy(policy_target)
+        assert target_identity_from_profile(reconstructed).fingerprint == identity.fingerprint
+
+
 def test_target_identity_requires_full_unambiguous_id(tmp_path: Path) -> None:
     """Automation never resolves the partial IDs accepted by interactive commands."""
     with pytest.raises(TargetIdentityError, match="full lowercase"):

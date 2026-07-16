@@ -118,6 +118,56 @@ def _effect(
     return ExternalEffect(present, payload, path, reason)
 
 
+class _ToolBoundaryControl:
+    def __init__(self, names: frozenset[str]) -> None:
+        self.expected_tool_names = names
+        self.reservations: list[tuple[str, dict[str, int]]] = []
+
+    def reserve(self, boundary: str, **reservation: int) -> dict[str, Any]:
+        self.reservations.append((boundary, reservation))
+        return {}
+
+
+class TestGovernedSessionRule:
+    """The proxy verifies installed tools and reserves every forwarded call."""
+
+    def test_tool_call_requires_list_verification(self) -> None:
+        control = _ToolBoundaryControl(frozenset({"read_inbox", "write_memo"}))
+        rule = experiment._GovernedSessionRule(control, None)  # type: ignore[arg-type]
+
+        with pytest.raises(experiment.ExperimentError, match="preceded exact schema"):
+            rule(_read_inbox_request())
+        assert control.reservations == []
+
+    def test_exact_tool_list_allows_only_named_reserved_calls(self) -> None:
+        control = _ToolBoundaryControl(frozenset({"read_inbox", "write_memo"}))
+        rule = experiment._GovernedSessionRule(control, None)  # type: ignore[arg-type]
+        listed = JSONRPCMessage(JSONRPCRequest(jsonrpc="2.0", id=7, method="tools/list", params={}))
+        response = JSONRPCMessage(
+            JSONRPCResponse(
+                jsonrpc="2.0",
+                id=7,
+                result={"tools": [{"name": "read_inbox"}, {"name": "write_memo"}]},
+            )
+        )
+        rule(_proxy_message(listed, Direction.CLIENT_TO_SERVER, proxy_id="list"))
+        rule(_proxy_message(response, Direction.SERVER_TO_CLIENT, proxy_id="listed"))
+        rule.require_verified()
+
+        unknown = JSONRPCMessage(
+            JSONRPCRequest(
+                jsonrpc="2.0",
+                id=8,
+                method="tools/call",
+                params={"name": "shell", "arguments": {}},
+            )
+        )
+        with pytest.raises(experiment.ExperimentError, match="outside the scenario allowlist"):
+            rule(_proxy_message(unknown, Direction.CLIENT_TO_SERVER, proxy_id="unknown"))
+        rule(_read_inbox_request())
+        assert control.reservations == [("tool_call", {"tool_calls": 1})]
+
+
 class TestCascadeInboxMutation:
     """Session A mutation is exact, consistent, and fail closed."""
 

@@ -1,8 +1,10 @@
-"""Non-executing domain service for governed CTPF automation."""
+"""Domain service for governed CTPF automation."""
 
 from __future__ import annotations
 
+import asyncio
 import datetime
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,6 +33,17 @@ from ctpf.automation.contracts import (
     PolicyDocument,
     RunSpec,
 )
+from ctpf.automation.control import (
+    BudgetExhaustedError,
+    ExecutionCancelledError,
+    ExecutionControl,
+    ExecutionDeadlineExceededError,
+    ExecutionInterruptedError,
+    deadline_at,
+    format_timestamp,
+    new_lease_id,
+    stale_before,
+)
 from ctpf.automation.envelope import ControlError
 from ctpf.automation.policy import evaluate_policy
 from ctpf.automation.store import (
@@ -41,11 +54,13 @@ from ctpf.automation.store import (
     StoredGrant,
     StoredPolicy,
     bind_grant_and_create_ready_run,
+    claim_run_execution,
     get_automation_run,
     get_automation_run_by_idempotency,
     get_grant,
     get_policy,
     list_events,
+    reconcile_stale_runs,
     save_grant,
     save_policy,
     transition_run_state,
@@ -63,8 +78,9 @@ from ctpf.automation.targets import (
     installed_scenario_capabilities,
     scenario_capability,
     target_identity_from_policy,
+    target_identity_from_profile,
 )
-from ctpf.core.db import get_connection, get_readonly_connection
+from ctpf.core.db import database_path, get_connection, get_readonly_connection
 from ctpf.core.schema import CURRENT_VERSION
 
 _TERMINAL_STATES = {
@@ -114,7 +130,7 @@ class ValidationResult:
 
 
 class AutomationService:
-    """Operate the approved WP3A control plane without experiment execution."""
+    """Operate the governed control plane and approved packaged experiments."""
 
     def __init__(self, *, db_path: Path | None = None) -> None:
         """Configure the service with an optional test database path."""
@@ -128,7 +144,7 @@ class AutomationService:
     ) -> dict[str, Any]:
         """Return static capabilities and optional authenticated policy scope."""
         payload: dict[str, Any] = {
-            "execute_available": False,
+            "execute_available": True,
             "scenarios": [item.to_payload() for item in installed_scenario_capabilities()],
             "verify_available": False,
         }
@@ -184,12 +200,63 @@ class AutomationService:
             raise ControlError("approval_invalid", "authorization binding failed") from exc
         return _start_payload(binding.run, created=binding.created)
 
-    def status(self, run_id: str) -> dict[str, Any]:
+    def status(
+        self,
+        run_id: str,
+        *,
+        now: datetime.datetime | None = None,
+    ) -> dict[str, Any]:
         """Return one governed run's lifecycle state and bounded event history."""
+        current = _aware_utc(now)
         with self._read_connection("run_not_found") as conn:
             run = _load_run(conn, run_id)
             events = list_events(conn, run.run_id)
+        if run.state in {AutomationRunState.RUNNING, AutomationRunState.CANCEL_REQUESTED}:
+            with get_connection(self._db_path) as conn:
+                reconcile_stale_runs(
+                    conn,
+                    stale_before=format_timestamp(stale_before(current)),
+                    now=format_timestamp(current),
+                )
+                run = _load_run(conn, run.run_id)
+                events = list_events(conn, run.run_id)
         return _status_payload(run, events)
+
+    async def execute(
+        self,
+        run_id: str,
+        *,
+        now: datetime.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Claim and foreground-run one exact authorized READY control."""
+        current = _aware_utc(now)
+        control = self._claim_execution(_full_id(run_id, "run_id"), current)
+        stop = asyncio.Event()
+        heartbeat = asyncio.create_task(control.heartbeat_loop(stop))
+        try:
+            return await _execute_claimed(control)
+        except ExecutionCancelledError as exc:
+            _finish_failure(control, AutomationRunState.CANCELLED, "cancelled")
+            raise ControlError("cancelled", "governed execution was cancelled") from exc
+        except ExecutionDeadlineExceededError as exc:
+            _finish_failure(control, AutomationRunState.FAILED, "deadline_exceeded")
+            raise ControlError("deadline_exceeded", "governed execution deadline expired") from exc
+        except BudgetExhaustedError as exc:
+            _finish_failure(control, AutomationRunState.FAILED, "budget_exhausted")
+            raise ControlError(
+                "budget_exhausted", "governed execution budget was exhausted"
+            ) from exc
+        except ExecutionInterruptedError as exc:
+            _finish_failure(control, AutomationRunState.INTERRUPTED, "interrupted")
+            raise ControlError("interrupted", "governed execution was interrupted") from exc
+        except ControlError:
+            raise
+        except BaseException as exc:
+            _finish_failure(control, AutomationRunState.FAILED, "execution_failed")
+            raise ControlError("execution_failed", "governed experiment execution failed") from exc
+        finally:
+            stop.set()
+            await asyncio.gather(heartbeat, return_exceptions=True)
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         """Request cancellation or cancel a READY run without executing it."""
@@ -314,6 +381,177 @@ class AutomationService:
             raise
         except (FileNotFoundError, sqlite3.Error) as exc:
             raise ControlError(missing_code, "automation database is unavailable") from exc
+
+    def _claim_execution(
+        self,
+        run_id: str,
+        now: datetime.datetime,
+    ) -> ExecutionControl:
+        try:
+            with get_connection(self._db_path) as conn:
+                _require_current_schema(conn)
+                run = _load_run(conn, run_id)
+                _require_ready_run(run)
+                spec = RunSpec.from_payload(_stored_object(run.spec_json, "spec_json"))
+                validation = _validate_with_connection(conn, spec, now)
+                _require_authorized(validation)
+                grant = _load_approval(conn, run.grant_id, validation, now)
+                _validate_execution_binding(run, grant, validation)
+                root = _execution_output_root(validation.policy.policy, spec.output_root_id)
+                planned_root = root / run.run_id
+                _require_unused_run_root(planned_root)
+                deadline = deadline_at(now, spec.limits.wall_clock_seconds)
+                conn.execute("BEGIN IMMEDIATE")
+                claimed = claim_run_execution(
+                    conn,
+                    run.run_id,
+                    lease_id=new_lease_id(),
+                    run_root=str(planned_root),
+                    manifest_path=str(planned_root / _manifest_name(spec)),
+                    deadline_at=format_timestamp(deadline),
+                    concurrent_runs=validation.policy.policy.limits.concurrent_runs,
+                    stale_before=format_timestamp(stale_before(now)),
+                    now=format_timestamp(now),
+                )
+        except ControlError:
+            raise
+        except (AutomationStoreError, ValueError) as exc:
+            code = "concurrency_exhausted" if "concurrency" in str(exc) else "run_state_conflict"
+            raise ControlError(code, "governed run could not be claimed") from exc
+        return ExecutionControl(
+            db_path=database_path(self._db_path),
+            run=claimed,
+            spec=spec,
+            policy=validation.policy.policy,
+            capability=validation.capability,
+            deadline_at=deadline,
+        )
+
+
+async def _execute_claimed(control: ExecutionControl) -> dict[str, Any]:
+    profiles = await _revalidate_live_targets(control)
+    from ctpf.experiment import run_governed_experiment
+
+    outcome = await run_governed_experiment(control, profiles)
+    control.checkpoint("finalization")
+    provenance_path = control.run_root / "automation-provenance.json"
+    _write_json(provenance_path, control.provenance_payload())
+    result = dict(outcome.result)
+    result["automation_provenance"] = provenance_path.relative_to(control.run_root).as_posix()
+    try:
+        finished = control.finish(
+            AutomationRunState.COMPLETED,
+            result=result,
+            manifest_path=outcome.manifest_path,
+        )
+    except AutomationStoreError:
+        control.checkpoint("completion")
+        raise
+    return _execution_payload(finished)
+
+
+async def _revalidate_live_targets(control: ExecutionControl) -> tuple[Any, ...]:
+    from ctpf.external_runtime import load_governed_target_profile
+
+    profiles: list[Any] = []
+    fingerprints: dict[str, str] = {}
+    try:
+        for reference in control.spec.experiment.targets:
+            profile = await load_governed_target_profile(
+                reference.target_id,
+                control,
+                db_path=control.db_path,
+            )
+            identity = target_identity_from_profile(profile)
+            _require_live_target(reference.target_fingerprint, identity.fingerprint)
+            profiles.append(profile)
+            fingerprints[identity.target_id] = identity.fingerprint
+    except ExecutionInterruptedError:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ExecutionInterruptedError("live target revalidation failed") from exc
+    control.record_revalidated_targets(fingerprints)
+    return tuple(profiles)
+
+
+def _require_ready_run(run: AutomationRunRecord) -> None:
+    if run.state != AutomationRunState.READY:
+        raise ControlError("run_state_conflict", "run is not READY")
+
+
+def _require_unused_run_root(path: Path) -> None:
+    if path.exists():
+        raise ControlError("output_root_changed", "governed run root already exists")
+
+
+def _require_live_target(expected: str, actual: str) -> None:
+    if actual != expected:
+        raise ExecutionInterruptedError("live target fingerprint changed after approval")
+
+
+def _validate_execution_binding(
+    run: AutomationRunRecord,
+    grant: AuthorizationGrant,
+    validation: ValidationResult,
+) -> None:
+    identity = (
+        run.policy_id == validation.policy.policy.policy_id
+        and run.policy_digest == validation.policy.digest
+        and run.grant_id == grant.grant_id
+        and run.spec_digest == validation.decision.spec_digest
+        and grant.spec_digest == run.spec_digest
+    )
+    if not identity:
+        raise ControlError("approval_spec_mismatch", "run authority no longer matches")
+
+
+def _execution_output_root(policy: PolicyDocument, root_id: str) -> Path:
+    selected = next((item for item in policy.output_roots if item.root_id == root_id), None)
+    if selected is None:
+        raise ControlError("output_root_denied", "output root is not authorized")
+    declared = Path(selected.resolved_path)
+    try:
+        resolved = declared.resolve(strict=True)
+    except OSError as exc:
+        raise ControlError("output_root_changed", "approved output root is unavailable") from exc
+    if not resolved.is_dir() or str(resolved) != selected.resolved_path:
+        raise ControlError("output_root_changed", "approved output root identity changed")
+    if _inside_git_checkout(resolved):
+        raise ControlError("output_root_in_git", "approved output root is inside Git")
+    return resolved
+
+
+def _manifest_name(spec: RunSpec) -> str:
+    return "series-manifest.json" if spec.experiment.mode.value == "matrix" else "run-manifest.json"
+
+
+def _finish_failure(
+    control: ExecutionControl,
+    state: AutomationRunState,
+    code: str,
+) -> None:
+    try:
+        control.finish(
+            state, error={"code": code, "message": "governed execution did not complete"}
+        )
+    except AutomationStoreError:
+        return
+
+
+def _execution_payload(run: AutomationRunRecord) -> dict[str, Any]:
+    return {
+        "result": _optional_stored_object(run.result_json, "result_json"),
+        "run_id": run.run_id,
+        "state": run.state.value,
+        "usage": _stored_object(run.usage_json, "usage_json"),
+    }
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def _validate_with_connection(
@@ -502,7 +740,7 @@ def _status_payload(run: AutomationRunRecord, events: list[dict[str, Any]]) -> d
         "cancel_requested_at": run.cancel_requested_at,
         "created_at": run.created_at,
         "events": events,
-        "execute_available": False,
+        "execute_available": True,
         "finished_at": run.finished_at,
         "run_id": run.run_id,
         "scenario_fingerprint": run.scenario_fingerprint,
@@ -517,7 +755,7 @@ def _status_payload(run: AutomationRunRecord, events: list[dict[str, Any]]) -> d
 def _start_payload(run: AutomationRunRecord, *, created: bool) -> dict[str, Any]:
     return {
         "created": created,
-        "execute_available": False,
+        "execute_available": True,
         "run_id": run.run_id,
         "spec_digest": run.spec_digest,
         "state": run.state.value,

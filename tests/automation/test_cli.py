@@ -24,6 +24,12 @@ class _FakeService:
             raise self._result
         return self._result
 
+    async def execute(self, run_id: str) -> dict[str, Any]:
+        del run_id
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
 
 def _envelope(output: str) -> dict[str, Any]:
     lines = [line for line in output.splitlines() if line.strip()]
@@ -45,7 +51,7 @@ def test_capabilities_emits_one_canonical_success_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Successful machine operations emit exactly one JSON object."""
-    expected = {"execute_available": False, "verify_available": False}
+    expected = {"execute_available": True, "verify_available": False}
     monkeypatch.setattr(automation_cli, "_service", lambda: _FakeService(expected))
 
     result = runner.invoke(app, ["experiment", "control", "capabilities"])
@@ -61,21 +67,40 @@ def test_capabilities_emits_one_canonical_success_envelope(
     }
 
 
-def test_invalid_input_and_unavailable_execution_use_stable_exit_codes() -> None:
+def test_invalid_input_and_missing_execution_use_stable_exit_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Input and lifecycle failures remain machine-branchable and traceback-free."""
+    missing = _FakeService(ControlError("run_not_found", "run was not found"))
+    monkeypatch.setattr(automation_cli, "_service", lambda: missing)
     malformed = runner.invoke(app, ["experiment", "control", "validate"], input="[]")
-    unavailable = runner.invoke(
+    absent = runner.invoke(
         app,
         ["experiment", "control", "execute", "a" * 32],
     )
 
     malformed_payload = _envelope(malformed.output)
-    unavailable_payload = _envelope(unavailable.output)
+    absent_payload = _envelope(absent.output)
     assert malformed.exit_code == 2
     assert malformed_payload["error"]["code"] == "invalid_json"
-    assert unavailable.exit_code == 4
-    assert unavailable_payload["error"]["code"] == "execution_unavailable"
-    assert "Traceback" not in malformed.output + unavailable.output
+    assert absent.exit_code == 4
+    assert absent_payload["error"]["code"] == "run_not_found"
+    assert "Traceback" not in malformed.output + absent.output
+
+
+def test_execute_emits_one_canonical_success_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Foreground execution remains a single machine-readable operation."""
+    expected = {"run_id": "a" * 32, "state": "COMPLETED"}
+    monkeypatch.setattr(automation_cli, "_service", lambda: _FakeService(expected))
+
+    result = runner.invoke(app, ["experiment", "control", "execute", "a" * 32])
+    payload = _envelope(result.output)
+
+    assert result.exit_code == 0
+    assert payload["data"] == expected
+    assert payload["operation"] == "execute"
 
 
 def test_not_found_is_state_exit_and_unexpected_errors_are_secret_safe(
