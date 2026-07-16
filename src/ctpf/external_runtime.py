@@ -9,7 +9,7 @@ import shutil
 import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Protocol, TypeAlias
 from urllib.parse import urlparse
 
 from ctpf.automation.contracts import BillingClass, DataEgressClass
@@ -75,6 +75,14 @@ _RUNTIME_ENV_NAMES = frozenset(
 
 class ExternalRuntimeError(RuntimeError):
     """Raised when an external runtime cannot preserve experiment integrity."""
+
+
+class RuntimeControl(Protocol):
+    """Narrow governed runtime boundary used without an import cycle."""
+
+    def reserve(self, boundary: str, **reservation: int) -> dict[str, Any]: ...
+
+    async def wait(self, awaitable: Any, boundary: str) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -160,12 +168,38 @@ def load_experiment_target_profile(
     return _claude_profile_from_target(target)
 
 
+async def load_governed_target_profile(
+    target_id: str,
+    control: RuntimeControl,
+    *,
+    db_path: Path | None = None,
+) -> ExperimentTargetProfile:
+    """Load one exact live target while accounting for identity-probe effects."""
+    target = _load_target(target_id, db_path)
+    if target.id != target_id:
+        raise ExternalRuntimeError("governed target ID did not resolve exactly")
+    if target.type == "inference":
+        return load_openai_target_profile(target_id, db_path=db_path)
+    if target.type != _TARGET_TYPE:
+        raise ExternalRuntimeError(f"unsupported experiment target type: {target.type!r}")
+    executable = _resolved_executable(target.uri)
+    control.reserve("runtime_identity_probe", runtime_processes=1)
+    version = await _inspect_claude_executable_async(executable, control)
+    return _claude_profile_from_values(target, executable, version)
+
+
 class ClaudeCodeDriver:
     """Run one fresh Claude Code CLI session against the loopback MCP proxy."""
 
-    def __init__(self, profile: ClaudeCodeTargetProfile) -> None:
+    def __init__(
+        self,
+        profile: ClaudeCodeTargetProfile,
+        *,
+        control: RuntimeControl | None = None,
+    ) -> None:
         """Configure the driver with an already validated non-secret profile."""
         self._profile = profile
+        self._control = control
 
     async def run(
         self,
@@ -193,6 +227,12 @@ class ClaudeCodeDriver:
         _write_json(transcript_path, transcript)
         process: asyncio.subprocess.Process | None = None
         try:
+            if self._control is not None:
+                self._control.reserve(
+                    "external_runtime",
+                    provider_requests=1,
+                    runtime_processes=1,
+                )
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=transcript_path.parent,
@@ -203,6 +243,7 @@ class ClaudeCodeDriver:
             stdout_raw, stderr_raw = await _communicate(
                 process,
                 self._profile.timeout_seconds,
+                self._control,
             )
             stdout = stdout_raw.decode("utf-8", errors="replace")
             stderr = stderr_raw.decode("utf-8", errors="replace")
@@ -223,9 +264,13 @@ class ClaudeCodeDriver:
 async def _communicate(
     process: asyncio.subprocess.Process,
     timeout_seconds: int,
+    control: RuntimeControl | None = None,
 ) -> tuple[bytes, bytes]:
     try:
-        return await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+        communication = process.communicate()
+        if control is not None:
+            communication = control.wait(communication, "external_runtime")
+        return await asyncio.wait_for(communication, timeout=timeout_seconds)
     except TimeoutError as exc:
         raise ExternalRuntimeError(
             f"Claude Code exceeded the {timeout_seconds}-second runtime limit"
@@ -248,6 +293,15 @@ def _load_target(target_ref: str, db_path: Path | None) -> Target:
 
 
 def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
+    executable, version = _inspect_claude_executable(target.uri)
+    return _claude_profile_from_values(target, executable, version)
+
+
+def _claude_profile_from_values(
+    target: Target,
+    executable: str,
+    version: str,
+) -> ClaudeCodeTargetProfile:
     metadata = target.metadata
     if not isinstance(metadata, dict):
         raise ExternalRuntimeError("agent-runtime target metadata must be a JSON object")
@@ -261,7 +315,6 @@ def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
     if driver != _DRIVER_NAME:
         raise ExternalRuntimeError(f"unsupported external runtime driver: {driver!r}")
     model = _exact_model(metadata)
-    executable, version = _inspect_claude_executable(target.uri)
     _require_always_load_support(version)
     retention = _required_bool(metadata, "retention_acknowledged")
     residual = _required_bool(metadata, "residual_cost_acknowledged")
@@ -279,6 +332,15 @@ def _claude_profile_from_target(target: Target) -> ClaudeCodeTargetProfile:
         retention_acknowledged=retention,
         residual_cost_acknowledged=residual,
     )
+
+
+def _resolved_executable(raw: str | None) -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ExternalRuntimeError("Claude Code target URI must name the CLI executable")
+    executable = shutil.which(raw.strip())
+    if executable is None:
+        raise ExternalRuntimeError(f"Claude Code executable not found: {raw.strip()!r}")
+    return executable
 
 
 def _required_string(metadata: dict[str, Any], key: str) -> str:
@@ -319,11 +381,7 @@ def _timeout_seconds(metadata: dict[str, Any]) -> int:
 
 
 def _inspect_claude_executable(raw: str | None) -> tuple[str, str]:
-    if not isinstance(raw, str) or not raw.strip():
-        raise ExternalRuntimeError("Claude Code target URI must name the CLI executable")
-    executable = shutil.which(raw.strip())
-    if executable is None:
-        raise ExternalRuntimeError(f"Claude Code executable not found: {raw.strip()!r}")
+    executable = _resolved_executable(raw)
     try:
         completed = subprocess.run(  # noqa: S603  # nosec B603
             [executable, "--version"],
@@ -338,6 +396,37 @@ def _inspect_claude_executable(raw: str | None) -> tuple[str, str]:
     if completed.returncode != 0 or not version:
         raise ExternalRuntimeError("Claude Code version check returned no usable version")
     return executable, version
+
+
+async def _inspect_claude_executable_async(
+    executable: str,
+    control: RuntimeControl,
+) -> str:
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        async with asyncio.timeout(VERSION_PROBE_TIMEOUT_SECONDS):
+            output = await control.wait(
+                process.communicate(),
+                "runtime_identity_probe",
+            )
+    except BaseException:
+        await _stop_process(process)
+        raise
+    if not isinstance(output, tuple) or len(output) != 2:
+        raise ExternalRuntimeError("Claude Code version check returned malformed output")
+    stdout, stderr = output[0], output[1]
+    if not isinstance(stdout, bytes) or not isinstance(stderr, bytes):
+        raise ExternalRuntimeError("Claude Code version check returned malformed output")
+    version = (stdout or stderr).decode("utf-8", errors="replace").strip()
+    if process.returncode != 0 or not version:
+        raise ExternalRuntimeError("Claude Code version check returned no usable version")
+    return version
 
 
 def _require_always_load_support(version: str) -> None:

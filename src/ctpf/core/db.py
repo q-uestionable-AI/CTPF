@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DB_PATH = Path.home() / ".ctpf" / "ctpf.db"
 
 
+def database_path(db_path: Path | None = None) -> Path:
+    """Return the normalized database path used by connection helpers."""
+    return (db_path or _DEFAULT_DB_PATH).expanduser().resolve()
+
+
 def now_iso() -> str:
     """Return current UTC time as ISO string."""
     return datetime.datetime.now(datetime.UTC).isoformat()
@@ -52,7 +57,7 @@ def get_connection(
     Yields:
         A sqlite3.Connection with row_factory set to sqlite3.Row.
     """
-    path = db_path if db_path is not None else _DEFAULT_DB_PATH
+    path = database_path(db_path)
     if db_path is None:
         ensure_ctpf_dir(path.parent)
     else:
@@ -88,7 +93,7 @@ def get_readonly_connection(
     Raises:
         FileNotFoundError: If the selected database does not exist.
     """
-    path = (db_path or _DEFAULT_DB_PATH).expanduser().resolve()
+    path = database_path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"CTPF database does not exist: {path}")
     conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)

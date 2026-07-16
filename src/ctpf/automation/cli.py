@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import sys
 from collections.abc import Callable
@@ -82,11 +83,11 @@ def control_start(
 
 @control_app.command("execute")
 def control_execute(run_id: str) -> None:
-    """Report that governed experiment execution is unavailable in WP3A."""
+    """Claim and foreground-run one exact authorized READY control."""
 
     def operation() -> _MachineResult:
-        _full_id(run_id, "run_id")
-        raise ControlError("execution_unavailable", "execution is unavailable in WP3A")
+        selected = _full_id(run_id, "run_id")
+        return asyncio.run(_service().execute(selected)), ()
 
     _run_machine("execute", operation)
 

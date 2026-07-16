@@ -189,11 +189,17 @@ class TestClaudeCodeTargetProfile:
     def test_rejects_unpinned_or_secret_metadata(
         self,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
         metadata: dict[str, Any],
         message: str,
     ) -> None:
         db_path = tmp_path / "ctpf.db"
         target_id = _create_runtime_target(db_path, metadata=metadata)
+        monkeypatch.setattr(
+            external_runtime,
+            "_inspect_claude_executable",
+            lambda _raw: ("C:/tools/claude.exe", "2.1.121 (Claude Code)"),
+        )
 
         with pytest.raises(ExternalRuntimeError, match=message):
             load_experiment_target_profile(target_id[:8], db_path=db_path)
@@ -247,6 +253,47 @@ class TestClaudeCodeDriver:
         assert transcript["status"] == "complete"
         assert transcript["command"][-1] == "<prompt>"
         assert transcript["events"] == [event]
+
+    async def test_governed_runtime_reserves_before_spawn_and_wraps_communication(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        event = {"type": "result", "subtype": "success", "is_error": False}
+        events: list[tuple[str, object]] = []
+
+        class Control:
+            def reserve(self, boundary: str, **reservation: int) -> dict[str, Any]:
+                events.append(("reserve", {"boundary": boundary, **reservation}))
+                return {}
+
+            async def wait(self, awaitable: Any, boundary: str) -> Any:
+                events.append(("wait", boundary))
+                return await awaitable
+
+        async def create_process(*_args: str, **_kwargs: Any) -> _FakeProcess:
+            events.append(("spawn", None))
+            return _FakeProcess(json.dumps(event) + "\n")
+
+        monkeypatch.setattr(external_runtime.asyncio, "create_subprocess_exec", create_process)
+        await ClaudeCodeDriver(_profile(), control=Control()).run(
+            "Inspect the inbox.",
+            "http://127.0.0.1:8765/mcp/",
+            tmp_path / "governed.inference.json",
+        )
+
+        assert events == [
+            (
+                "reserve",
+                {
+                    "boundary": "external_runtime",
+                    "provider_requests": 1,
+                    "runtime_processes": 1,
+                },
+            ),
+            ("spawn", None),
+            ("wait", "external_runtime"),
+        ]
 
     def test_custom_mcp_server_name_is_applied_without_scenario_logic(self) -> None:
         config = external_runtime._mcp_config(

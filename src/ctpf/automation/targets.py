@@ -301,6 +301,62 @@ def target_identity_from_policy(target: TargetPolicy) -> TargetIdentity:
     )
 
 
+def execution_profile_from_policy(
+    target: TargetPolicy,
+) -> OpenAICompatibleTargetProfile | ClaudeCodeTargetProfile:
+    """Reconstruct a non-secret execution profile from an authenticated snapshot."""
+    identity = target_identity_from_policy(target)
+    behavior = identity.behavior
+    if identity.target_type == "inference":
+        return _inference_profile_from_behavior(target, behavior)
+    return _runtime_profile_from_behavior(target, behavior)
+
+
+def _inference_profile_from_behavior(
+    target: TargetPolicy,
+    behavior: dict[str, Any],
+) -> OpenAICompatibleTargetProfile:
+    endpoint = behavior["endpoint"]
+    generation = behavior["generation_parameters"]
+    limits = behavior["limits"]
+    temperature = generation["temperature"]
+    return OpenAICompatibleTargetProfile(
+        target_id=target.target_id,
+        name=f"governed-{target.target_id[:8]}",
+        endpoint=endpoint["normalized_url"],
+        model=behavior["model"],
+        credential_name=behavior["credential_alias"],
+        max_tokens=limits["max_output_tokens"],
+        temperature=float(temperature) if temperature is not None else None,
+        seed=generation["seed"],
+        reasoning_effort=generation["reasoning_effort"],
+        max_input_tokens=limits["max_input_tokens"],
+        billing_class=target.billing_class,
+        request_cost_ceiling_microusd=target.request_cost_ceiling_microusd,
+        data_egress_class=target.data_egress_class,
+        retention_acknowledged=target.retention_acknowledged,
+        residual_cost_acknowledged=target.residual_cost_acknowledged,
+    )
+
+
+def _runtime_profile_from_behavior(
+    target: TargetPolicy,
+    behavior: dict[str, Any],
+) -> ClaudeCodeTargetProfile:
+    return ClaudeCodeTargetProfile(
+        target_id=target.target_id,
+        name=f"governed-{target.target_id[:8]}",
+        executable=behavior["executable"],
+        model=behavior["model"],
+        runtime_version=behavior["runtime_version"],
+        timeout_seconds=behavior["timeout_seconds"],
+        billing_class=target.billing_class,
+        data_egress_class=target.data_egress_class,
+        retention_acknowledged=target.retention_acknowledged,
+        residual_cost_acknowledged=target.residual_cost_acknowledged,
+    )
+
+
 def classify_inference_endpoint(endpoint: str) -> NetworkClass:
     """Classify one normalized inference endpoint for the initial policy.
 

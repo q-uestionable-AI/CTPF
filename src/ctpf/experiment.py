@@ -22,6 +22,14 @@ from mcp.types import JSONRPCMessage
 
 from ctpf import __version__
 from ctpf.automation.cli import control_app, govern_app
+from ctpf.automation.contracts import ExperimentMode
+from ctpf.automation.control import (
+    PROCESS_TERMINATE_GRACE_SECONDS,
+    ExecutionCancelledError,
+    ExecutionControl,
+    SessionWork,
+)
+from ctpf.automation.targets import execution_profile_from_policy, target_identity_from_profile
 from ctpf.driven_inference import (
     DrivenInferenceError,
     OpenAICompatibleDriver,
@@ -220,6 +228,14 @@ class CascadeMatrixResult:
 
 
 @dataclass(frozen=True)
+class GovernedExperimentResult:
+    """Mechanical result and authoritative manifest for one controlled run."""
+
+    manifest_path: Path
+    result: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class _MatrixTrialSpec:
     target_id: str
     target_name: str
@@ -296,6 +312,7 @@ class _Pattern2RunState:
     series_root: Path
     manifest_path: Path
     operator: _Operator
+    control: ExecutionControl | None
 
 
 class _Operator(Protocol):
@@ -342,8 +359,13 @@ class _ConsoleOperator:
 
 
 class _DrivenOperator:
-    def __init__(self, profile: OpenAICompatibleTargetProfile) -> None:
+    def __init__(
+        self,
+        profile: OpenAICompatibleTargetProfile,
+        control: ExecutionControl | None = None,
+    ) -> None:
         self._profile = profile
+        self._control = control
 
     async def wait_for_completion(
         self,
@@ -356,14 +378,20 @@ class _DrivenOperator:
     ) -> None:
         if inference_path is None:
             raise ExperimentError("driven sessions require an inference transcript path")
-        driver = OpenAICompatibleDriver(self._profile)
+        driver = OpenAICompatibleDriver(self._profile, control=self._control)
         await driver.run(prompt, endpoint, inference_path)
 
 
 class _ClaudeCodeOperator:
-    def __init__(self, profile: ClaudeCodeTargetProfile, mcp_server_name: str) -> None:
+    def __init__(
+        self,
+        profile: ClaudeCodeTargetProfile,
+        mcp_server_name: str,
+        control: ExecutionControl | None = None,
+    ) -> None:
         self._profile = profile
         self._mcp_server_name = mcp_server_name
+        self._control = control
 
     async def wait_for_completion(
         self,
@@ -376,7 +404,7 @@ class _ClaudeCodeOperator:
     ) -> None:
         if inference_path is None:
             raise ExperimentError("external-runtime sessions require a transcript path")
-        driver = ClaudeCodeDriver(self._profile)
+        driver = ClaudeCodeDriver(self._profile, control=self._control)
         await driver.run(
             prompt,
             endpoint,
@@ -390,11 +418,12 @@ def _operator_for(
     *,
     mcp_server_name: str = _CASCADE_MCP_SERVER_NAME,
     expected_tool_count: int = _CASCADE_TOOL_COUNT,
+    control: ExecutionControl | None = None,
 ) -> _Operator:
     if isinstance(profile, ClaudeCodeTargetProfile):
-        return _ClaudeCodeOperator(profile, mcp_server_name)
+        return _ClaudeCodeOperator(profile, mcp_server_name, control)
     if isinstance(profile, OpenAICompatibleTargetProfile):
-        return _DrivenOperator(profile)
+        return _DrivenOperator(profile, control)
     return _ConsoleOperator(mcp_server_name, expected_tool_count)
 
 
@@ -505,6 +534,191 @@ def run_pattern2_cli(
     typer.echo(f"Series complete: {result.root}")
     typer.echo(f"Primary result: {result.primary.promotion_result.value}")
     typer.echo(f"Hardened result: {result.hardened.promotion_result.value}")
+
+
+async def run_governed_experiment(
+    control: ExecutionControl,
+    profiles: tuple[ExperimentTargetProfile, ...],
+) -> GovernedExperimentResult:
+    """Run the exact packaged experiment bound to one claimed control."""
+    _validate_governed_profiles(control, profiles)
+    control.checkpoint("output_creation")
+    spec = control.spec
+    if spec.experiment.mode == ExperimentMode.MATRIX:
+        return await _run_governed_matrix(control, profiles)
+    return await _run_governed_single(control, profiles[0])
+
+
+async def _run_governed_matrix(
+    control: ExecutionControl,
+    profiles: tuple[ExperimentTargetProfile, ...],
+) -> GovernedExperimentResult:
+    spec = control.spec
+    matrix_result = await run_cascade_matrix(
+        CascadeMatrixOptions(
+            tuple(reference.target_id for reference in spec.experiment.targets),
+            spec.experiment.trials_per_target,
+            control.run_root.parent,
+            control.policy.limits.loopback_port,
+            control.db_path,
+        ),
+        control=control,
+        profiles=tuple(
+            profile for profile in profiles if isinstance(profile, OpenAICompatibleTargetProfile)
+        ),
+        matrix_id=control.run_id,
+    )
+    relative_manifest = matrix_result.manifest_path.relative_to(control.run_root).as_posix()
+    return GovernedExperimentResult(
+        matrix_result.manifest_path,
+        {
+            "manifest": relative_manifest,
+            "mode": "matrix",
+            "scenario": _CASCADE_SCENARIO_ID,
+            "trials_completed": len(matrix_result.trials),
+        },
+    )
+
+
+async def _run_governed_single(
+    control: ExecutionControl,
+    profile: ExperimentTargetProfile,
+) -> GovernedExperimentResult:
+    spec = control.spec
+    port = control.policy.limits.loopback_port
+    target_id = spec.experiment.targets[0].target_id
+    if spec.experiment.scenario == _CASCADE_SCENARIO_ID:
+        cascade_result = await run_cascade_memo(
+            CascadeExperimentOptions(
+                None,
+                control.run_root.parent,
+                port,
+                target_id,
+                control.db_path,
+            ),
+            series_id=control.run_id,
+            profile=profile,
+            control=control,
+        )
+        return _governed_cascade_result(control, cascade_result)
+    if spec.experiment.scenario == _PATTERN2_SCENARIO_ID:
+        pattern_result = await run_pattern2(
+            Pattern2ExperimentOptions(
+                None,
+                control.run_root.parent,
+                port,
+                target_id,
+                control.db_path,
+            ),
+            series_id=control.run_id,
+            profile=profile,
+            control=control,
+        )
+        return _governed_pattern2_result(control, pattern_result)
+    raise ExperimentError("governed RunSpec selected an unsupported scenario")
+
+
+def _validate_governed_profiles(
+    control: ExecutionControl,
+    profiles: tuple[ExperimentTargetProfile, ...],
+) -> None:
+    expected = tuple(reference.target_id for reference in control.spec.experiment.targets)
+    actual = tuple(profile.target_id for profile in profiles)
+    if actual != expected:
+        raise ExperimentError("live profiles differ from the governed RunSpec order")
+    if control.spec.experiment.mode == ExperimentMode.MATRIX and not all(
+        isinstance(profile, OpenAICompatibleTargetProfile) for profile in profiles
+    ):
+        raise ExperimentError("governed matrix requires inference profiles only")
+
+
+def _governed_cascade_result(
+    control: ExecutionControl,
+    result: CascadeExperimentResult,
+) -> GovernedExperimentResult:
+    manifest = result.root / "run-manifest.json"
+    return GovernedExperimentResult(
+        manifest,
+        {
+            "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
+            "hardened_result": result.hardened.promotion_result.value,
+            "manifest": manifest.relative_to(control.run_root).as_posix(),
+            "mode": "single",
+            "primary_result": result.primary.promotion_result.value,
+            "scenario": _CASCADE_SCENARIO_ID,
+        },
+    )
+
+
+def _governed_pattern2_result(
+    control: ExecutionControl,
+    result: Pattern2ExperimentResult,
+) -> GovernedExperimentResult:
+    manifest = result.root / "run-manifest.json"
+    return GovernedExperimentResult(
+        manifest,
+        {
+            "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
+            "hardened_result": result.hardened.promotion_result.value,
+            "manifest": manifest.relative_to(control.run_root).as_posix(),
+            "mode": "single",
+            "primary_result": result.primary.promotion_result.value,
+            "scenario": _PATTERN2_SCENARIO_ID,
+        },
+    )
+
+
+@run_app.command("_controlled-session", hidden=True)
+def run_controlled_session_worker_cli(
+    automation_run_id: Annotated[str, typer.Option()],
+    db_path: Annotated[Path, typer.Option(hidden=True)],
+) -> None:
+    """Execute the sole prepared session using durable governed authority."""
+    asyncio.run(_run_controlled_session_worker(automation_run_id, db_path))
+
+
+async def _run_controlled_session_worker(automation_run_id: str, db_path: Path) -> None:
+    control = ExecutionControl.attach(automation_run_id, db_path)
+    work = control.claim_session()
+    target_policy = control.target_policy(work.target_id)
+    profile = execution_profile_from_policy(target_policy)
+    if target_identity_from_profile(profile).fingerprint != target_policy.target_fingerprint:
+        raise ExperimentError("session target identity changed after parent revalidation")
+    trace_path = control.path(work.trace_path)
+    mutation_path = control.path(work.mutation_path) if work.mutation_path is not None else None
+    inference_path = control.path(work.inference_path) if work.inference_path is not None else None
+    spec = _worker_session_spec(
+        work.scenario,
+        _Condition(work.condition),
+        work.session_name,
+        trace_path,
+        work.fixture_run_id,
+        work.reset,
+        mutation_path,
+        inference_path,
+    )
+    options_class = (
+        Pattern2ExperimentOptions
+        if work.scenario == _PATTERN2_SCENARIO_ID
+        else CascadeExperimentOptions
+    )
+    options = options_class(
+        profile.model,
+        control.run_root,
+        work.listen_port,
+        work.target_id,
+        control.db_path,
+    )
+    operator = _operator_for(
+        profile,
+        mcp_server_name=spec.mcp_server_name,
+        expected_tool_count=spec.expected_tool_count,
+        control=control,
+    )
+    await _run_session(spec, options, operator, control=control)
+    if spec.mutation is not None and spec.mutation_path is not None:
+        spec.mutation.validate()
+        _write_json(spec.mutation_path, spec.mutation.record())
 
 
 @run_app.command("_session", hidden=True)
@@ -648,6 +862,8 @@ async def run_cascade_memo(
     operator: _Operator | None = None,
     series_id: str | None = None,
     condition_order: tuple[_Condition, ...] | None = None,
+    profile: ExperimentTargetProfile | None = None,
+    control: ExecutionControl | None = None,
 ) -> CascadeExperimentResult:
     """Run one isolated baseline/manipulated/hardened cascade series.
 
@@ -660,16 +876,18 @@ async def run_cascade_memo(
     Returns:
         Completed paths and causal results.
     """
-    output_root = _validate_options(options)
-    profile = _load_target_profile(options)
+    output_root = _validate_options(options, governed=control is not None)
+    profile = _selected_profile(options, profile)
     options = _resolved_options(options, profile)
     fixture_command = _fixture_command()
     series_id = series_id or _new_series_id()
     selected_order = _validated_condition_order(condition_order)
     series_root = output_root / series_id
+    if control is not None:
+        control.checkpoint("output_creation")
     series_root.mkdir()
     manifest_path = series_root / "run-manifest.json"
-    operator = operator or _operator_for(profile)
+    operator = operator or _operator_for(profile, control=control)
     results: dict[_Condition, _ConditionResult] = {}
     if profile is not None:
         _write_json(series_root / _TARGET_PROFILE_NAME, profile.evidence_payload())
@@ -684,12 +902,21 @@ async def run_cascade_memo(
     )
 
     async def run_one(condition: _Condition) -> _ConditionResult:
+        if control is None:
+            return await _run_condition(
+                condition,
+                series_id,
+                series_root,
+                options,
+                operator,
+            )
         return await _run_condition(
             condition,
             series_id,
             series_root,
             options,
             operator,
+            control,
         )
 
     def record_progress(current: dict[_Condition, _ConditionResult]) -> None:
@@ -704,7 +931,15 @@ async def run_cascade_memo(
         )
 
     try:
-        await _run_condition_sequence(selected_order, results, run_one, record_progress)
+        await _run_condition_sequence(
+            selected_order,
+            results,
+            run_one,
+            record_progress,
+            control=control,
+        )
+        if control is not None:
+            control.checkpoint("finalization")
         completed = _complete_series(
             series_root,
             options,
@@ -717,7 +952,7 @@ async def run_cascade_memo(
             manifest_path,
             options,
             series_id,
-            "failed",
+            _incomplete_status(exc),
             results,
             condition_order=selected_order,
             error=f"{type(exc).__name__}: {exc}",
@@ -742,9 +977,13 @@ async def _run_condition_sequence(
     results: dict[_Condition, _ConditionResultType],
     run_one: Callable[[_Condition], Awaitable[_ConditionResultType]],
     record_progress: Callable[[dict[_Condition, _ConditionResultType]], None],
+    *,
+    control: ExecutionControl | None = None,
 ) -> None:
     """Run one condition triad sequentially while preserving partial state."""
     for condition in condition_order:
+        if control is not None:
+            control.checkpoint("condition")
         results[condition] = await run_one(condition)
         record_progress(results)
 
@@ -755,6 +994,8 @@ async def run_pattern2(
     operator: _Operator | None = None,
     series_id: str | None = None,
     condition_order: tuple[_Condition, ...] | None = None,
+    profile: ExperimentTargetProfile | None = None,
+    control: ExecutionControl | None = None,
 ) -> Pattern2ExperimentResult:
     """Run one isolated baseline/manipulated/hardened Pattern 2 series.
 
@@ -767,7 +1008,14 @@ async def run_pattern2(
     Returns:
         Completed paths and primary/hardened causal results.
     """
-    state = _prepare_pattern2_run(options, operator, series_id, condition_order)
+    state = _prepare_pattern2_run(
+        options,
+        operator,
+        series_id,
+        condition_order,
+        profile,
+        control,
+    )
     results: dict[_Condition, _Pattern2ConditionResult] = {}
     _record_pattern2_status(state, "running", results)
     try:
@@ -775,7 +1023,7 @@ async def run_pattern2(
     except BaseException as exc:
         _record_pattern2_status(
             state,
-            "failed",
+            _incomplete_status(exc),
             results,
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -789,20 +1037,25 @@ def _prepare_pattern2_run(
     operator: _Operator | None,
     series_id: str | None,
     condition_order: tuple[_Condition, ...] | None,
+    profile: ExperimentTargetProfile | None,
+    control: ExecutionControl | None,
 ) -> _Pattern2RunState:
-    output_root = _validate_options(options)
-    profile = _load_target_profile(options)
+    output_root = _validate_options(options, governed=control is not None)
+    profile = _selected_profile(options, profile)
     options = _resolved_options(options, profile)
     fixture_command = _pattern2_fixture_command()
     series_id = series_id or _new_pattern2_series_id()
     selected_order = _validated_condition_order(condition_order)
     series_root = output_root / series_id
+    if control is not None:
+        control.checkpoint("output_creation")
     series_root.mkdir()
     manifest_path = series_root / "run-manifest.json"
     operator = operator or _operator_for(
         profile,
         mcp_server_name=_PATTERN2_MCP_SERVER_NAME,
         expected_tool_count=_PATTERN2_TOOL_COUNT,
+        control=control,
     )
     if profile is not None:
         _write_json(series_root / _TARGET_PROFILE_NAME, profile.evidence_payload())
@@ -815,6 +1068,7 @@ def _prepare_pattern2_run(
         series_root,
         manifest_path,
         operator,
+        control,
     )
 
 
@@ -823,18 +1077,35 @@ async def _execute_pattern2_conditions(
     results: dict[_Condition, _Pattern2ConditionResult],
 ) -> Pattern2ExperimentResult:
     async def run_one(condition: _Condition) -> _Pattern2ConditionResult:
+        if state.control is None:
+            return await _run_pattern2_condition(
+                condition,
+                state.series_id,
+                state.series_root,
+                state.options,
+                state.operator,
+            )
         return await _run_pattern2_condition(
             condition,
             state.series_id,
             state.series_root,
             state.options,
             state.operator,
+            state.control,
         )
 
     def record_progress(current: dict[_Condition, _Pattern2ConditionResult]) -> None:
         _record_pattern2_status(state, "running", current)
 
-    await _run_condition_sequence(state.condition_order, results, run_one, record_progress)
+    await _run_condition_sequence(
+        state.condition_order,
+        results,
+        run_one,
+        record_progress,
+        control=state.control,
+    )
+    if state.control is not None:
+        state.control.checkpoint("finalization")
     return _complete_pattern2_series(
         state.series_root,
         state.options,
@@ -865,7 +1136,13 @@ def _record_pattern2_status(
     )
 
 
-async def run_cascade_matrix(options: CascadeMatrixOptions) -> CascadeMatrixResult:
+async def run_cascade_matrix(
+    options: CascadeMatrixOptions,
+    *,
+    control: ExecutionControl | None = None,
+    profiles: tuple[OpenAICompatibleTargetProfile, ...] | None = None,
+    matrix_id: str | None = None,
+) -> CascadeMatrixResult:
     """Run a sequential multi-model matrix of complete cascade triads.
 
     Args:
@@ -874,10 +1151,12 @@ async def run_cascade_matrix(options: CascadeMatrixOptions) -> CascadeMatrixResu
     Returns:
         Completed matrix paths and per-trial results.
     """
-    output_root, profiles = _prepare_matrix(options)
-    matrix_id = _new_matrix_id()
+    output_root, profiles = _prepare_matrix(options, profiles, governed=control is not None)
+    matrix_id = matrix_id or _new_matrix_id()
     matrix_root = output_root / matrix_id
     trials_root = matrix_root / "trials"
+    if control is not None:
+        control.checkpoint("output_creation")
     trials_root.mkdir(parents=True)
     manifest_path = matrix_root / _MATRIX_MANIFEST_NAME
     schedule = _matrix_schedule(profiles, options.trials_per_model)
@@ -885,30 +1164,46 @@ async def run_cascade_matrix(options: CascadeMatrixOptions) -> CascadeMatrixResu
     completed: list[CascadeExperimentResult] = []
     _write_matrix_manifest(manifest_path, options, matrix_id, "running", profiles, records)
     for index, spec in enumerate(schedule):
+        if control is not None:
+            control.checkpoint("matrix_trial")
         record = records[index]
         record["status"] = "running"
         _write_matrix_manifest(manifest_path, options, matrix_id, "running", profiles, records)
         try:
-            result = await run_cascade_memo(
-                CascadeExperimentOptions(
-                    None,
-                    trials_root,
-                    options.listen_port,
-                    spec.target_id,
-                    options.db_path,
-                ),
-                series_id=spec.series_id,
-                condition_order=spec.condition_order,
+            trial_options = CascadeExperimentOptions(
+                None,
+                trials_root,
+                options.listen_port,
+                spec.target_id,
+                options.db_path,
             )
+            if control is None:
+                result = await run_cascade_memo(
+                    trial_options,
+                    series_id=spec.series_id,
+                    condition_order=spec.condition_order,
+                )
+            else:
+                selected_profile = next(
+                    profile for profile in profiles if profile.target_id == spec.target_id
+                )
+                result = await run_cascade_memo(
+                    trial_options,
+                    series_id=spec.series_id,
+                    condition_order=spec.condition_order,
+                    profile=selected_profile,
+                    control=control,
+                )
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
-            record["status"] = "failed"
+            status = _incomplete_status(exc)
+            record["status"] = status
             record["error"] = error
             _write_matrix_manifest(
                 manifest_path,
                 options,
                 matrix_id,
-                "failed",
+                status,
                 profiles,
                 records,
                 error=error,
@@ -932,6 +1227,9 @@ def _validate_matrix_cli_model(model: str | None) -> None:
 
 def _prepare_matrix(
     options: CascadeMatrixOptions,
+    profiles: tuple[OpenAICompatibleTargetProfile, ...] | None = None,
+    *,
+    governed: bool = False,
 ) -> tuple[Path, tuple[OpenAICompatibleTargetProfile, ...]]:
     references = tuple(reference.strip() for reference in options.targets)
     if len(references) < _MIN_MATRIX_TARGETS:
@@ -941,11 +1239,15 @@ def _prepare_matrix(
     if not _MIN_MATRIX_TRIALS <= options.trials_per_model <= _MAX_MATRIX_TRIALS:
         raise ExperimentError("matrix mode requires 3-5 trials per model")
     _validate_listen_port(options.listen_port)
-    profiles = _load_matrix_profiles(references, options.db_path)
+    profiles = profiles or _load_matrix_profiles(references, options.db_path)
+    if len(profiles) != len(references):
+        raise ExperimentError("matrix profiles differ from requested targets")
     target_ids = {profile.target_id for profile in profiles}
     if len(target_ids) != len(profiles):
         raise ExperimentError("matrix targets must resolve to distinct target profiles")
-    return _validated_output_root(options.output_root), profiles
+    if governed and tuple(profile.target_id for profile in profiles) != references:
+        raise ExperimentError("matrix profiles differ from requested target order")
+    return _validated_output_root(options.output_root, create=not governed), profiles
 
 
 def _load_matrix_profiles(
@@ -1050,6 +1352,7 @@ async def _run_pattern2_condition(
     series_root: Path,
     options: Pattern2ExperimentOptions,
     operator: _Operator,
+    control: ExecutionControl | None = None,
 ) -> _Pattern2ConditionResult:
     files = _pattern2_condition_files(series_root, series_id, condition)
     files.root.mkdir()
@@ -1066,7 +1369,9 @@ async def _run_pattern2_condition(
         files.mutation if mutation is not None else None,
         files.inference if options.target else None,
     )
-    await _capture_session(spec, options, operator)
+    await _capture_session(spec, options, operator, control)
+    if control is not None:
+        control.checkpoint("effect_copy")
     _copy_if_present(_pattern2_fixture_artifact_path(files.run_id), files.sink)
     observation = _observe_pattern2_condition(condition, files)
     _write_json(files.observation, _pattern2_observation_payload(observation))
@@ -1092,6 +1397,7 @@ async def _run_condition(
     series_root: Path,
     options: CascadeExperimentOptions,
     operator: _Operator,
+    control: ExecutionControl | None = None,
 ) -> _ConditionResult:
     files = _condition_files(series_root, series_id, condition)
     files.root.mkdir()
@@ -1102,7 +1408,10 @@ async def _run_condition(
         options,
         operator,
         mutation,
+        control,
     )
+    if control is not None:
+        control.checkpoint("effect_copy")
     memo_source, sink_source = _fixture_artifact_paths(files.run_id)
     _copy_if_present(memo_source, files.memo)
     _copy_if_present(sink_source, files.sink)
@@ -1117,6 +1426,7 @@ async def _capture_condition_sessions(
     options: CascadeExperimentOptions,
     operator: _Operator,
     mutation: _CascadeInboxMutation | None,
+    control: ExecutionControl | None = None,
 ) -> None:
     session_a = _build_session_spec(
         _CASCADE_SCENARIO_ID,
@@ -1142,15 +1452,19 @@ async def _capture_condition_sessions(
         None,
         files.session_b_inference if options.target else None,
     )
-    await _capture_session(session_a, options, operator)
-    await _capture_session(session_b, options, operator)
+    await _capture_session(session_a, options, operator, control)
+    await _capture_session(session_b, options, operator, control)
 
 
 async def _capture_session(
     spec: _SessionSpec,
     options: CascadeExperimentOptions | Pattern2ExperimentOptions,
     operator: _Operator,
+    control: ExecutionControl | None = None,
 ) -> None:
+    if control is not None:
+        await _run_controlled_session_process(spec, options, control)
+        return
     if isinstance(operator, (_ConsoleOperator, _DrivenOperator, _ClaudeCodeOperator)):
         await asyncio.to_thread(_run_console_session_process, spec, options)
         return
@@ -1172,6 +1486,79 @@ def _run_console_session_process(
             f"isolated {spec.condition.value} session {spec.name} failed "
             f"with exit code {completed.returncode}"
         )
+
+
+async def _run_controlled_session_process(
+    spec: _SessionSpec,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    control: ExecutionControl,
+) -> None:
+    target_id = options.target
+    if not isinstance(target_id, str) or not target_id:
+        raise ExperimentError("governed sessions require one exact target ID")
+    work = SessionWork(
+        work_id=uuid.uuid4().hex,
+        scenario=spec.scenario_id,
+        condition=spec.condition.value,
+        session_name=spec.name,
+        target_id=target_id,
+        fixture_run_id=spec.run_id,
+        trace_path=spec.trace_path.relative_to(control.run_root).as_posix(),
+        inference_path=_controlled_relative(spec.inference_path, control.run_root),
+        mutation_path=_controlled_relative(spec.mutation_path, control.run_root),
+        reset=spec.reset,
+        listen_port=options.listen_port,
+    )
+    control.prepare_session(work)
+    control.checkpoint("session_process")
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *_controlled_session_command(control),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        returncode = await control.wait(process.wait(), "session_process")
+    except BaseException as exc:
+        await _stop_owned_process(process)
+        status = "cancelled" if isinstance(exc, ExecutionCancelledError) else "failed"
+        control.finish_session(work.work_id, status)
+        raise
+    if returncode != 0:
+        control.finish_session(work.work_id, "failed")
+        detail = f"{spec.condition.value} session {spec.name} failed with exit code {returncode}"
+        raise ExperimentError(f"isolated {detail}")
+    control.finish_session(work.work_id, "complete")
+
+
+def _controlled_relative(path: Path | None, root: Path) -> str | None:
+    return path.relative_to(root).as_posix() if path is not None else None
+
+
+def _controlled_session_command(control: ExecutionControl) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "ctpf",
+        "experiment",
+        "run",
+        "_controlled-session",
+        "--automation-run-id",
+        control.run_id,
+        "--db-path",
+        str(control.db_path),
+    ]
+
+
+async def _stop_owned_process(process: asyncio.subprocess.Process | None) -> None:
+    if process is None or process.returncode is not None:
+        return
+    process.terminate()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=PROCESS_TERMINATE_GRACE_SECONDS)
+    except TimeoutError:
+        process.kill()
+        await asyncio.wait_for(process.wait(), timeout=PROCESS_TERMINATE_GRACE_SECONDS)
 
 
 def _session_worker_command(
@@ -1216,12 +1603,15 @@ async def _run_session(
     spec: _SessionSpec,
     options: CascadeExperimentOptions | Pattern2ExperimentOptions,
     operator: _Operator,
+    *,
+    control: ExecutionControl | None = None,
 ) -> None:
     model = _model(options)
     store = _session_store(spec, model)
+    rule = _GovernedSessionRule(control, spec.mutation) if control is not None else spec.mutation
     pipeline = PipelineSession(
         session_store=store,
-        intercept_engine=InterceptEngine(rule=spec.mutation),
+        intercept_engine=InterceptEngine(rule=rule),
         transport=Transport.STDIO,
     )
     runtime = ProxyRuntime(pipeline)
@@ -1237,6 +1627,8 @@ async def _run_session(
         try:
             runtime_task = asyncio.create_task(runtime.run(config))
             await _wait_until_runtime_ready(runtime, runtime_task)
+            if control is not None:
+                control.checkpoint("session_operator")
             await operator.wait_for_completion(
                 spec.condition,
                 spec.name,
@@ -1245,6 +1637,8 @@ async def _run_session(
                 endpoint,
                 spec.inference_path,
             )
+            if isinstance(rule, _GovernedSessionRule):
+                rule.require_verified()
         finally:
             try:
                 await runtime.stop()
@@ -1252,7 +1646,71 @@ async def _run_session(
                     await runtime_task
             finally:
                 store.save(spec.trace_path)
-                await asyncio.sleep(_LISTENER_RESTART_COOLDOWN)
+                cooldown = asyncio.sleep(_LISTENER_RESTART_COOLDOWN)
+                if control is None:
+                    await cooldown
+                else:
+                    await control.wait(cooldown, "listener_cooldown")
+
+
+class _GovernedSessionRule:
+    """Verify exact fixture tools and reserve each call before forwarding."""
+
+    def __init__(
+        self,
+        control: ExecutionControl,
+        mutation: _CascadeInboxMutation | _Pattern2StatusMutation | None,
+    ) -> None:
+        self._control = control
+        self._mutation = mutation
+        self._tool_list_ids: set[str | int] = set()
+        self._verified = False
+
+    def __call__(self, message: ProxyMessage) -> InterceptDecision | None:
+        if message.direction == Direction.CLIENT_TO_SERVER:
+            self._handle_request(message)
+        else:
+            self._handle_response(message)
+        return self._mutation(message) if self._mutation is not None else None
+
+    def require_verified(self) -> None:
+        """Require an exact tools/list response before session completion."""
+        if not self._verified:
+            raise ExperimentError("governed session did not verify its MCP tool schemas")
+
+    def _handle_request(self, message: ProxyMessage) -> None:
+        payload = message.raw.model_dump(by_alias=True, exclude_none=True)
+        method = payload.get("method")
+        if method == "tools/list" and message.jsonrpc_id is not None:
+            self._tool_list_ids.add(message.jsonrpc_id)
+            return
+        if method != "tools/call":
+            return
+        if not self._verified:
+            raise ExperimentError("MCP tool call preceded exact schema verification")
+        params = payload.get("params")
+        name = params.get("name") if isinstance(params, dict) else None
+        if not isinstance(name, str) or name not in self._control.expected_tool_names:
+            raise ExperimentError("MCP tool call is outside the scenario allowlist")
+        self._control.reserve("tool_call", tool_calls=1)
+
+    def _handle_response(self, message: ProxyMessage) -> None:
+        if message.jsonrpc_id not in self._tool_list_ids:
+            return
+        self._tool_list_ids.discard(message.jsonrpc_id)
+        payload = message.raw.model_dump(by_alias=True, exclude_none=True)
+        result = payload.get("result")
+        tools = result.get("tools") if isinstance(result, dict) else None
+        if not isinstance(tools, list):
+            raise ExperimentError("MCP tools/list response is malformed")
+        names = {
+            tool.get("name")
+            for tool in tools
+            if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+        }
+        if len(names) != len(tools) or names != self._control.expected_tool_names:
+            raise ExperimentError("MCP tool schemas differ from the scenario allowlist")
+        self._verified = True
 
 
 async def _wait_until_runtime_ready(
@@ -1906,6 +2364,8 @@ def _temporary_environment(values: dict[str, str]) -> Iterator[None]:
 
 def _validate_options(
     options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    *,
+    governed: bool = False,
 ) -> Path:
     model = options.model.strip() if isinstance(options.model, str) else ""
     target = options.target.strip() if isinstance(options.target, str) else ""
@@ -1914,7 +2374,7 @@ def _validate_options(
     if target and model:
         raise ExperimentError("--model and --target are mutually exclusive")
     _validate_listen_port(options.listen_port)
-    return _validated_output_root(options.output_root)
+    return _validated_output_root(options.output_root, create=not governed)
 
 
 def _validate_listen_port(listen_port: int) -> None:
@@ -1922,14 +2382,24 @@ def _validate_listen_port(listen_port: int) -> None:
         raise ExperimentError("--listen-port must be between 1 and 65535")
 
 
-def _validated_output_root(output_root: Path) -> Path:
-    root = output_root.expanduser().resolve()
+def _validated_output_root(output_root: Path, *, create: bool = True) -> Path:
+    declared = output_root.expanduser()
+    root = declared.resolve()
+    if not create and root != declared:
+        raise ExperimentError("governed output root identity changed")
+    if not create and not root.is_dir():
+        raise ExperimentError("governed output root is unavailable")
     if root.exists() and not root.is_dir():
         raise ExperimentError("--output-root must be a directory")
     if _inside_git_checkout(root):
         raise ExperimentError("--output-root must be outside a Git checkout")
-    root.mkdir(parents=True, exist_ok=True)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _incomplete_status(exc: BaseException) -> str:
+    return "cancelled" if isinstance(exc, ExecutionCancelledError) else "failed"
 
 
 def _validated_condition_order(
@@ -1952,6 +2422,17 @@ def _load_target_profile(
         return load_experiment_target_profile(options.target, db_path=options.db_path)
     except ExternalRuntimeError as exc:
         raise ExperimentError(str(exc)) from exc
+
+
+def _selected_profile(
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    supplied: ExperimentTargetProfile | None,
+) -> ExperimentTargetProfile | None:
+    if supplied is None:
+        return _load_target_profile(options)
+    if not options.target or supplied.target_id != options.target:
+        raise ExperimentError("supplied target profile differs from the requested exact target")
+    return supplied
 
 
 @overload
