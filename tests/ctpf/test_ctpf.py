@@ -17,6 +17,7 @@ from ctpf.kernel import (
     ExperimentPins,
     ExternalEffect,
     Pattern2Scenario,
+    PromotionReason,
     PromotionResult,
     RunObservation,
     TrustTransition,
@@ -93,8 +94,10 @@ class TestTrustTransitionSchema:
             observed_tool_arguments={"action": "approve_refund"},
             external_effect={"effect": "applied"},
             promotion_result=PromotionResult.CONFIRMED,
+            promotion_reason=PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT,
         )
         assert record.promotion_result == "CONFIRMED"
+        assert record.promotion_reason == "confirmed_clean_baseline_promoted_treatment"
         assert record.observed_tool_invocation == "apply_change"
         assert record.external_effect == {"effect": "applied"}
 

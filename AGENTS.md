@@ -5,9 +5,11 @@ or other second agent-instruction file.
 
 CTPF is an evidence-first research project for Capability Trust Propagation Failure (CTPF).
 The `ctpf` PyPI package and CLI are its reference research harness, not the project identity.
-Durable program guidance lives in the lab vault
-`CTPF/Project Instructions.md`; current sequence and progress live in the active plan and boards.
-Do not invent a parallel roadmap inside the repo.
+Durable program guidance and sequence SSOT live in the lab vault mode card
+`C:\Users\richs\vaults\MLSecOps Lab\CTPF\Project Instructions.md`; current gates live in the
+active plan and `Boards/*`. When sequence changes, update those vault surfaces (and
+`Project-Status.md` only on milestones or clear staleness). Do not invent a parallel roadmap
+inside the repo. See `.cursor/rules/ctpf-vault-ops.mdc`.
 
 ## Critical Context
 

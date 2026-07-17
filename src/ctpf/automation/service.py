@@ -9,7 +9,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ctpf.automation.approval import (
@@ -146,7 +146,7 @@ class AutomationService:
         payload: dict[str, Any] = {
             "execute_available": True,
             "scenarios": [item.to_payload() for item in installed_scenario_capabilities()],
-            "verify_available": False,
+            "verify_available": True,
         }
         if policy_id is None:
             return payload
@@ -286,6 +286,34 @@ class AutomationService:
             "run_id": run.run_id,
             "state": run.state.value,
         }
+
+    def verify(self, run_id: str) -> dict[str, Any]:
+        """Verify the run's declared evidence bundle without accepting arbitrary paths."""
+        with self._read_connection("run_not_found") as conn:
+            run = _load_run(conn, run_id)
+        if run.state not in _TERMINAL_STATES:
+            raise ControlError("result_unavailable", "run has no terminal result")
+        if run.run_root is None:
+            raise ControlError("evidence_missing", "governed run has no output root")
+        result = _optional_stored_object(run.result_json, "result_json")
+        if result is None:
+            raise ControlError("evidence_missing", "governed run has no mechanical result")
+        bundle_rel = result.get("bundle")
+        if not isinstance(bundle_rel, str) or not bundle_rel.strip():
+            raise ControlError("evidence_missing", "mechanical result does not declare a bundle")
+        bundle_dir = _resolve_run_relative(Path(run.run_root), bundle_rel, "bundle")
+        from ctpf.kernel.verify import verify_evidence_bundle
+
+        verification = verify_evidence_bundle(bundle_dir)
+        payload = verification.to_payload()
+        payload["bundle"] = bundle_rel
+        payload["run_id"] = run.run_id
+        if not verification.ok:
+            issue = verification.failures[0] if verification.failures else None
+            code = issue.code if issue is not None else "manifest_invalid"
+            message = issue.message if issue is not None else "evidence verification failed"
+            raise ControlError(code, message, details={"verification": payload})
+        return payload
 
     def create_policy(
         self,
@@ -487,6 +515,27 @@ def _require_unused_run_root(path: Path) -> None:
 def _require_live_target(expected: str, actual: str) -> None:
     if actual != expected:
         raise ExecutionInterruptedError("live target fingerprint changed after approval")
+
+
+def _resolve_run_relative(run_root: Path, relative: str, label: str) -> Path:
+    """Resolve one declared run-relative path without accepting escapes."""
+    posix = PurePosixPath(relative)
+    if (
+        posix.is_absolute()
+        or relative.startswith(("/", "\\"))
+        or any(part in {"", ".", ".."} for part in posix.parts)
+        or any(":" in part for part in posix.parts)
+    ):
+        raise ControlError("artifact_path_invalid", f"{label} path is unsafe")
+    selected = run_root.joinpath(*posix.parts)
+    try:
+        resolved = selected.resolve(strict=False)
+        boundary = run_root.resolve(strict=False)
+    except OSError as exc:
+        raise ControlError("evidence_missing", f"{label} path is unreadable") from exc
+    if not resolved.is_relative_to(boundary):
+        raise ControlError("artifact_path_invalid", f"{label} path escapes the run root")
+    return selected
 
 
 def _validate_execution_binding(

@@ -159,7 +159,7 @@ def test_discovery_and_validation_do_not_create_a_database(tmp_path: Path) -> No
 
     capabilities = service.capabilities()
     assert capabilities["execute_available"] is True
-    assert capabilities["verify_available"] is False
+    assert capabilities["verify_available"] is True
     _assert_control_error("policy_not_found", lambda: service.validate(spec, now=NOW))
     assert not db_path.exists()
     assert not output_root.exists()

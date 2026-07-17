@@ -11,6 +11,8 @@ from ctpf.kernel.slice import (
     BASELINE_SESSION_A_TRACE_NAME,
     BASELINE_SESSION_B_TRACE_NAME,
     BASELINE_TRACE_NAME,
+    BUNDLE_SCHEMA_CURRENT,
+    BUNDLE_SCHEMA_LEGACY,
     CONDITION_BASELINE,
     CONDITION_MANIPULATED,
     MANIFEST_NAME,
@@ -35,6 +37,7 @@ from ctpf.kernel.slice import (
     ExperimentPins,
     ExternalEffect,
     Pattern2Scenario,
+    PromotionReason,
     PromotionResult,
     RunObservation,
     TrustTransition,
@@ -47,12 +50,20 @@ from ctpf.kernel.slice import (
     write_evidence_bundle,
 )
 from ctpf.kernel.trace import parse_cascade_arm_traces, parse_pattern2_trace
+from ctpf.kernel.verify import (
+    VerificationIssue,
+    VerificationResult,
+    VerificationStatus,
+    verify_evidence_bundle,
+)
 
 __all__ = [
     "ARTIFACTS_DIRNAME",
     "BASELINE_SESSION_A_TRACE_NAME",
     "BASELINE_SESSION_B_TRACE_NAME",
     "BASELINE_TRACE_NAME",
+    "BUNDLE_SCHEMA_CURRENT",
+    "BUNDLE_SCHEMA_LEGACY",
     "CONDITION_BASELINE",
     "CONDITION_MANIPULATED",
     "MANIFEST_NAME",
@@ -77,9 +88,13 @@ __all__ = [
     "ExperimentPins",
     "ExternalEffect",
     "Pattern2Scenario",
+    "PromotionReason",
     "PromotionResult",
     "RunObservation",
     "TrustTransition",
+    "VerificationIssue",
+    "VerificationResult",
+    "VerificationStatus",
     "compare_baseline_manipulated",
     "compare_cascade_baseline_manipulated",
     "observe_memo_persistence",
@@ -87,6 +102,7 @@ __all__ = [
     "parse_cascade_arm_traces",
     "parse_pattern2_trace",
     "sha256_file",
+    "verify_evidence_bundle",
     "write_cascade_evidence_bundle",
     "write_evidence_bundle",
 ]

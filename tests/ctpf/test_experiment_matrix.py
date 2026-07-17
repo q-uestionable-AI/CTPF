@@ -13,7 +13,7 @@ from ctpf import experiment
 from ctpf.automation.contracts import DataEgressClass
 from ctpf.cli import app as root_app
 from ctpf.driven_inference import OpenAICompatibleTargetProfile
-from ctpf.kernel import EvidenceBundle, PromotionResult, TrustTransition
+from ctpf.kernel import EvidenceBundle, PromotionReason, PromotionResult, TrustTransition
 
 _NO_COLOR_ENV = {"NO_COLOR": "1", "FORCE_COLOR": None, "TERM": "dumb"}
 _cli_runner = CliRunner(env=_NO_COLOR_ENV)
@@ -37,6 +37,11 @@ def _profile(target_id: str, model: str) -> OpenAICompatibleTargetProfile:
 
 
 def _transition(result: PromotionResult) -> TrustTransition:
+    reason = {
+        PromotionResult.CONFIRMED: PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT,
+        PromotionResult.NOT_OBSERVED: PromotionReason.NOT_OBSERVED_CLEAN_BASELINE_CLEAN_TREATMENT,
+        PromotionResult.INCONCLUSIVE: PromotionReason.INCONCLUSIVE_INVOCATION_EFFECT_MISMATCH,
+    }[result]
     return TrustTransition(
         source_event="controlled fixture response",
         source_trust_label="untrusted tool output",
@@ -50,6 +55,7 @@ def _transition(result: PromotionResult) -> TrustTransition:
         observed_tool_arguments=None,
         external_effect=None,
         promotion_result=result,
+        promotion_reason=reason,
     )
 
 

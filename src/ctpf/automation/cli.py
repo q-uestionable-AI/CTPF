@@ -112,11 +112,11 @@ def control_result(run_id: str) -> None:
 
 @control_app.command("verify")
 def control_verify(run_id: str) -> None:
-    """Report that first-class evidence verification remains a later work package."""
+    """Verify the governed run's declared evidence bundle for internal consistency."""
 
     def operation() -> _MachineResult:
-        _full_id(run_id, "run_id")
-        raise ControlError("verification_unavailable", "verification is unavailable until WP4")
+        selected = _full_id(run_id, "run_id")
+        return _service().verify(selected), ()
 
     _run_machine("verify", operation)
 

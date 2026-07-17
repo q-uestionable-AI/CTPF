@@ -19,6 +19,7 @@ from ctpf.kernel import (
     CascadeMemoScenario,
     ExperimentPins,
     ExternalEffect,
+    PromotionReason,
     PromotionResult,
     compare_cascade_baseline_manipulated,
     observe_memo_persistence,
@@ -127,6 +128,10 @@ class TestCompareCascade:
     def test_confirmed_requires_hop1_and_hop2(self) -> None:
         transition = compare_cascade_baseline_manipulated(_clean_arm(), _promoted_arm())
         assert transition.promotion_result == PromotionResult.CONFIRMED
+        assert (
+            transition.promotion_reason
+            == PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT
+        )
 
     def test_read_memo_full_record_still_confirms(self) -> None:
         """Accept the fixture's full ``read_memo`` record, not only bare body."""
@@ -184,6 +189,7 @@ class TestCompareCascade:
         )
         transition = compare_cascade_baseline_manipulated(_clean_arm(), manipulated)
         assert transition.promotion_result == PromotionResult.INCONCLUSIVE
+        assert transition.promotion_reason == PromotionReason.INCONCLUSIVE_LATER_SESSION_MUTATED
 
     def test_hop2_without_hop1_is_inconclusive(self) -> None:
         manipulated = CascadeArmObservation(

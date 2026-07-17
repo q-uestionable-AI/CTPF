@@ -639,14 +639,7 @@ def _governed_cascade_result(
     manifest = result.root / "run-manifest.json"
     return GovernedExperimentResult(
         manifest,
-        {
-            "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
-            "hardened_result": result.hardened.promotion_result.value,
-            "manifest": manifest.relative_to(control.run_root).as_posix(),
-            "mode": "single",
-            "primary_result": result.primary.promotion_result.value,
-            "scenario": _CASCADE_SCENARIO_ID,
-        },
+        _governed_mechanical_result(control, result, _CASCADE_SCENARIO_ID),
     )
 
 
@@ -657,15 +650,31 @@ def _governed_pattern2_result(
     manifest = result.root / "run-manifest.json"
     return GovernedExperimentResult(
         manifest,
-        {
-            "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
-            "hardened_result": result.hardened.promotion_result.value,
-            "manifest": manifest.relative_to(control.run_root).as_posix(),
-            "mode": "single",
-            "primary_result": result.primary.promotion_result.value,
-            "scenario": _PATTERN2_SCENARIO_ID,
-        },
+        _governed_mechanical_result(control, result, _PATTERN2_SCENARIO_ID),
     )
+
+
+def _governed_mechanical_result(
+    control: ExecutionControl,
+    result: CascadeExperimentResult | Pattern2ExperimentResult,
+    scenario: str,
+) -> dict[str, Any]:
+    """Expose authoritative mechanical records without collapsing invocation/effect."""
+    manifest = result.root / "run-manifest.json"
+    return {
+        "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
+        "hardened_reason": result.hardened.promotion_reason.value,
+        "hardened_result": result.hardened.promotion_result.value,
+        "hardened_transition": (result.root / _HARDENED_TRANSITION_NAME)
+        .relative_to(control.run_root)
+        .as_posix(),
+        "manifest": manifest.relative_to(control.run_root).as_posix(),
+        "mode": "single",
+        "primary_reason": result.primary.promotion_reason.value,
+        "primary_result": result.primary.promotion_result.value,
+        "primary_transition": result.bundle.result_path.relative_to(control.run_root).as_posix(),
+        "scenario": scenario,
+    }
 
 
 @run_app.command("_controlled-session", hidden=True)
@@ -946,6 +955,7 @@ async def run_cascade_memo(
             fixture_command,
             results,
             profile,
+            provenance=_bundle_provenance(control),
         )
     except BaseException as exc:
         _write_series_manifest(
@@ -1112,6 +1122,7 @@ async def _execute_pattern2_conditions(
         state.fixture_command,
         results,
         state.profile,
+        provenance=_bundle_provenance(state.control),
     )
 
 
@@ -1774,6 +1785,7 @@ def _complete_pattern2_series(
     fixture_command: str,
     results: dict[_Condition, _Pattern2ConditionResult],
     profile: ExperimentTargetProfile | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> Pattern2ExperimentResult:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -1797,17 +1809,19 @@ def _complete_pattern2_series(
         results,
         primary,
         profile,
+        provenance=provenance,
     )
     return Pattern2ExperimentResult(series_root, bundle, primary, hardened_result)
 
 
-def _write_pattern2_primary_bundle(
+def _write_pattern2_primary_bundle(  # noqa: PLR0913 - series completion packing
     series_root: Path,
     options: Pattern2ExperimentOptions,
     fixture_command: str,
     results: dict[_Condition, _Pattern2ConditionResult],
     primary: TrustTransition,
     profile: ExperimentTargetProfile | None,
+    provenance: dict[str, Any] | None = None,
 ) -> EvidenceBundle:
     artifacts = _pattern2_bundle_artifacts(series_root, results, profile)
     configuration = {
@@ -1834,6 +1848,7 @@ def _write_pattern2_primary_bundle(
         result=primary,
         experiment=experiment,
         artifacts=artifacts,
+        provenance=provenance,
     )
 
 
@@ -1867,6 +1882,7 @@ def _complete_series(
     fixture_command: str,
     results: dict[_Condition, _ConditionResult],
     profile: ExperimentTargetProfile | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> CascadeExperimentResult:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -1890,17 +1906,19 @@ def _complete_series(
         results,
         primary,
         profile,
+        provenance=provenance,
     )
     return CascadeExperimentResult(series_root, bundle, primary, hardened_result)
 
 
-def _write_primary_bundle(
+def _write_primary_bundle(  # noqa: PLR0913 - series completion packing
     series_root: Path,
     options: CascadeExperimentOptions,
     fixture_command: str,
     results: dict[_Condition, _ConditionResult],
     primary: TrustTransition,
     profile: ExperimentTargetProfile | None,
+    provenance: dict[str, Any] | None = None,
 ) -> EvidenceBundle:
     baseline = results[_Condition.BASELINE]
     manipulated = results[_Condition.MANIPULATED]
@@ -1928,7 +1946,26 @@ def _write_primary_bundle(
         result=primary,
         experiment=experiment,
         artifacts=artifacts,
+        provenance=provenance,
     )
+
+
+def _bundle_provenance(control: ExecutionControl | None) -> dict[str, Any] | None:
+    """Return bounded governed provenance for new evidence bundles."""
+    if control is None:
+        return None
+    payload = control.provenance_payload()
+    return {
+        "grant_id": payload["grant_id"],
+        "policy_digest": payload["policy_digest"],
+        "run_id": payload["run_id"],
+        "scenario_fingerprint": payload["scenario_fingerprint"],
+        "spec_digest": payload["spec_digest"],
+        "target_fingerprints": {
+            reference.target_id: reference.target_fingerprint
+            for reference in control.spec.experiment.targets
+        },
+    }
 
 
 def _bundle_artifacts(
@@ -1994,6 +2031,7 @@ def _agent_pin(profile: ExperimentTargetProfile | None) -> str:
 def _transition_payload(transition: TrustTransition) -> dict[str, Any]:
     payload = asdict(transition)
     payload["promotion_result"] = transition.promotion_result.value
+    payload["promotion_reason"] = transition.promotion_reason.value
     return payload
 
 
@@ -2524,9 +2562,12 @@ def _write_pattern2_series_manifest(  # noqa: PLR0913
         payload["target_profile"] = profile.evidence_payload()
     if completed is not None:
         payload["primary_result"] = completed.primary.promotion_result.value
+        payload["primary_reason"] = completed.primary.promotion_reason.value
         payload["hardened_result"] = completed.hardened.promotion_result.value
+        payload["hardened_reason"] = completed.hardened.promotion_reason.value
         payload["bundle"] = _relative_path(completed.bundle.root, path.parent)
         payload["hardened_transition"] = _HARDENED_TRANSITION_NAME
+        payload["primary_transition"] = _relative_path(completed.bundle.result_path, path.parent)
     _write_json(path, payload)
 
 
@@ -2597,9 +2638,12 @@ def _write_series_manifest(  # noqa: PLR0913
         payload["target_profile"] = profile.evidence_payload()
     if completed is not None:
         payload["primary_result"] = completed.primary.promotion_result.value
+        payload["primary_reason"] = completed.primary.promotion_reason.value
         payload["hardened_result"] = completed.hardened.promotion_result.value
+        payload["hardened_reason"] = completed.hardened.promotion_reason.value
         payload["bundle"] = _relative_path(completed.bundle.root, path.parent)
         payload["hardened_transition"] = _HARDENED_TRANSITION_NAME
+        payload["primary_transition"] = _relative_path(completed.bundle.result_path, path.parent)
     _write_json(path, payload)
 
 

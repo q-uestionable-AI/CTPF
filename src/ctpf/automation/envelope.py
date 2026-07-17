@@ -51,9 +51,11 @@ _STATE_CODES = {
 _EXECUTION_CODES = {"cancelled", "deadline_exceeded", "execution_failed", "interrupted"}
 _VERIFICATION_CODES = {
     "artifact_missing",
+    "artifact_path_invalid",
     "evidence_missing",
     "hash_mismatch",
     "manifest_invalid",
+    "result_manifest_mismatch",
     "verification_unavailable",
 }
 

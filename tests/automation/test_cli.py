@@ -51,7 +51,7 @@ def test_capabilities_emits_one_canonical_success_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Successful machine operations emit exactly one JSON object."""
-    expected = {"execute_available": True, "verify_available": False}
+    expected = {"execute_available": True, "verify_available": True}
     monkeypatch.setattr(automation_cli, "_service", lambda: _FakeService(expected))
 
     result = runner.invoke(app, ["experiment", "control", "capabilities"])
