@@ -218,7 +218,7 @@ def _canonical_endpoint(
 
 def _declared_network_class(metadata: dict[str, Any]) -> NetworkClass | None:
     value = metadata.get("network_class")
-    if value in {None, ""}:
+    if value is None or value == "":
         return None
     parsed = _enum_metadata(metadata, "network_class", NetworkClass)
     if parsed == NetworkClass.EXTERNAL_RUNTIME:

@@ -213,6 +213,34 @@ class TestTargetProfile:
         with pytest.raises(DrivenInferenceError, match=r"max_tokens.*integer"):
             load_openai_target_profile(target_id[:8], db_path=db_path)
 
+    @pytest.mark.parametrize("network_class", [[], {}])
+    def test_rejects_malformed_network_class_metadata(
+        self,
+        tmp_path: Path,
+        network_class: object,
+    ) -> None:
+        db_path = tmp_path / "ctpf.db"
+        with get_connection(db_path) as conn:
+            target_id = create_target(
+                conn,
+                type="inference",
+                name="bad remote",
+                uri="https://models.example.test/v1",
+                metadata={
+                    "driver": "openai-compatible",
+                    "model": "model-a",
+                    "credential": "remote-a",
+                    "network_class": network_class,
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
+                },
+            )
+
+        with pytest.raises(DrivenInferenceError, match=r"non-empty 'network_class'"):
+            load_openai_target_profile(target_id[:8], db_path=db_path)
+
     def test_rejects_unsupported_reasoning_effort(self, tmp_path: Path) -> None:
         db_path = tmp_path / "ctpf.db"
         with get_connection(db_path) as conn:
