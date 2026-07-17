@@ -103,10 +103,18 @@ Persisted targets identify the execution seam:
 - `agent-runtime` with the demonstrated `claude-code-cli` driver and runtime-managed authentication;
 - MCP server targets used by observation/proxy workflows.
 
-Driven inference uses LiteLLM behind the provider-neutral `core.llm` contract. API keys are fetched
-from the OS keyring and are never stored in target metadata, config files, environment variables, or
-evidence. The Claude Code adapter supplies a minimal non-secret environment and relies on the
-runtime's secure login.
+Driven inference uses a narrow direct OpenAI-compatible client behind the provider-neutral
+`core.llm` contract. API keys are fetched from the OS keyring and are never stored in target
+metadata, config files, environment variables, or evidence. The Claude Code adapter supplies a
+minimal non-secret environment and relies on the runtime's secure login.
+
+Inference target identity binds one of three network classes. Exact loopback is inferred and may
+use HTTP. Public HTTPS is inferred from a fully qualified hostname and must resolve only to globally
+routable addresses. Private HTTPS must be declared explicitly with target metadata
+`network_class=https_private`; it requires a fully qualified TLS hostname and resolution containing
+only RFC 1918 IPv4 or unique-local IPv6 addresses. Both HTTPS classes use the bounded-remote policy
+tier, packaged-synthetic-remote egress, explicit retention/residual-cost acknowledgements, system
+certificate trust, address pinning, one request per connection, and denied redirects.
 
 There is no adapter registry, plugin system, recipe language, DAG, or general external-artifact
 ingestion contract. A future study may add one narrow external seam only after demonstrating that

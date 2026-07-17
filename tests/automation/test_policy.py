@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime
 from dataclasses import replace
 
+import pytest
+
 from ctpf.automation.contracts import (
     AuthorizationTier,
     BillingClass,
@@ -155,7 +157,7 @@ def _target_policy(
             if network == NetworkClass.EXTERNAL_RUNTIME
             else (
                 DataEgressClass.PACKAGED_SYNTHETIC_REMOTE
-                if network == NetworkClass.HTTPS_PUBLIC
+                if network != NetworkClass.LOOPBACK
                 else DataEgressClass.LOCAL_ONLY
             )
         ),
@@ -294,15 +296,19 @@ def test_remote_metered_target_requires_tier_two_and_reserves_cost() -> None:
     assert decision.minimum_reservations.cost_limit_microusd == 900_000
 
 
-def test_remote_target_is_denied_at_local_tier() -> None:
+@pytest.mark.parametrize(
+    "network",
+    [NetworkClass.HTTPS_PUBLIC, NetworkClass.HTTPS_PRIVATE],
+)
+def test_remote_target_is_denied_at_local_tier(network: NetworkClass) -> None:
     """A policy listing does not let an agent understate required authority."""
-    target_policy = _target_policy(network=NetworkClass.HTTPS_PUBLIC)
+    target_policy = _target_policy(network=network)
 
     decision = evaluate_policy(
         _spec(),
         _policy(target=target_policy),
         _capability(),
-        (_identity(network=NetworkClass.HTTPS_PUBLIC),),
+        (_identity(network=network),),
         now=NOW,
     )
 

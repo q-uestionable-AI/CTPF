@@ -67,8 +67,20 @@ def test_installed_capabilities_are_stable_and_cover_demonstrated_scenarios() ->
     ],
 )
 def test_inference_endpoint_classification(endpoint: str, expected: NetworkClass) -> None:
-    """Only loopback HTTP and fully qualified public HTTPS are classifiable."""
+    """Loopback and public HTTPS remain safely inferable."""
     assert classify_inference_endpoint(endpoint) == expected
+
+
+def test_private_https_endpoint_classification_requires_explicit_authority() -> None:
+    endpoint = "https://inference-gateway.mlsecopslab.io/v1"
+
+    assert (
+        classify_inference_endpoint(
+            endpoint,
+            declared_network_class=NetworkClass.HTTPS_PRIVATE,
+        )
+        == NetworkClass.HTTPS_PRIVATE
+    )
 
 
 @pytest.mark.parametrize(
@@ -127,6 +139,34 @@ def test_inference_target_identity_pins_behavior_without_secret_value(tmp_path: 
     }
     assert "remote research model" not in str(identity.to_payload())
     assert len(identity.fingerprint) == 64
+
+
+def test_private_https_target_identity_pins_declared_network_authority(tmp_path: Path) -> None:
+    db_path = tmp_path / "ctpf.db"
+    with get_connection(db_path) as conn:
+        target_id = create_target(
+            conn,
+            type="inference",
+            name="private inference gateway",
+            uri="https://inference-gateway.mlsecopslab.io/v1",
+            metadata={
+                "credential": "inference-gateway",
+                "driver": "openai-compatible",
+                "max_tokens": "512",
+                "model": "qwen3.5:4b",
+                "network_class": "https_private",
+                "billing_class": "unmetered",
+                "data_egress_class": "packaged_synthetic_remote",
+                "retention_acknowledged": True,
+                "residual_cost_acknowledged": True,
+            },
+        )
+
+    identity = load_target_identity(target_id, db_path=db_path)
+
+    assert identity.network_class == NetworkClass.HTTPS_PRIVATE
+    assert identity.behavior["endpoint"]["network_class"] == "https_private"
+    assert identity.behavior["endpoint"]["host"] == "inference-gateway.mlsecopslab.io"
 
 
 def test_external_runtime_target_identity_pins_inspected_runtime(
@@ -345,6 +385,7 @@ def test_every_profile_authority_mutation_changes_inference_fingerprint() -> Non
     baseline = target_identity_from_profile(profile).fingerprint
     mutations = (
         replace(profile, endpoint="https://other.example.test/v1"),
+        replace(profile, network_class=NetworkClass.HTTPS_PRIVATE),
         replace(profile, model="model-b"),
         replace(profile, credential_name="remote-b"),
         replace(profile, max_tokens=257),

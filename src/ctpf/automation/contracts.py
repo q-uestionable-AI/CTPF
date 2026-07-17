@@ -62,6 +62,7 @@ class NetworkClass(StrEnum):
     """Initial autonomous target network classes."""
 
     LOOPBACK = "loopback"
+    HTTPS_PRIVATE = "https_private"
     HTTPS_PUBLIC = "https_public"
     EXTERNAL_RUNTIME = "external_runtime"
 

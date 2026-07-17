@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from ctpf import driven_inference
-from ctpf.automation.contracts import BillingClass, DataEgressClass
+from ctpf.automation.contracts import BillingClass, DataEgressClass, NetworkClass
 from ctpf.core.db import create_target, get_connection
 from ctpf.core.llm import NormalizedResponse, ToolCall, ToolSpec
 from ctpf.driven_inference import (
@@ -181,6 +181,7 @@ class TestTargetProfile:
         profile = load_openai_target_profile(target_id[:8], db_path=db_path)
 
         assert profile.endpoint == "https://models.example.test/v1"
+        assert profile.network_class == NetworkClass.HTTPS_PUBLIC
         assert profile.model == "model-a"
         assert profile.max_tokens == 512
         assert profile.generation_parameters() == {
