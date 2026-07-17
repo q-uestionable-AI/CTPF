@@ -1,4 +1,4 @@
-"""Tests for proxy listen host and Pattern 2 stdio env forwarding."""
+"""Tests for proxy listen host and research-fixture stdio env forwarding."""
 
 from __future__ import annotations
 
@@ -26,6 +26,23 @@ def test_stdio_subprocess_env_forwards_pattern2_vars(
     assert env["CTPF_PATTERN2_RUN_ID"] == "m01"
     assert env["CTPF_PATTERN2_RESET_SINK"] == "1"
     assert "PATH" in env
+
+
+def test_stdio_subprocess_env_forwards_pattern3_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CTPF_PATTERN3_* must be forwarded past MCP's default env whitelist."""
+    monkeypatch.setenv("CTPF_PATTERN3_AUTHORITY_PATH", "C:/evidence/authority.json")
+    monkeypatch.setenv("CTPF_PATTERN3_CONDITION", "baseline")
+    monkeypatch.setenv("CTPF_PATTERN3_RESET_SINK", "1")
+    monkeypatch.setenv("CTPF_PATTERN3_RUN_ID", "p3-baseline")
+
+    env = stdio_subprocess_env()
+
+    assert env["CTPF_PATTERN3_AUTHORITY_PATH"] == "C:/evidence/authority.json"
+    assert env["CTPF_PATTERN3_CONDITION"] == "baseline"
+    assert env["CTPF_PATTERN3_RESET_SINK"] == "1"
+    assert env["CTPF_PATTERN3_RUN_ID"] == "p3-baseline"
 
 
 def test_stdio_subprocess_env_forwards_cascade_vars(
