@@ -52,8 +52,6 @@ uv.lock
 .memory/
 .superpowers/
 .cursor/*
-!.cursor/rules/
-!.cursor/rules/**
 
 results/
 payloads/
