@@ -109,8 +109,9 @@ def _policy_payload() -> dict[str, object]:
                 "scenario": "pattern2",
             }
         ],
-        "schema_version": 3,
+        "schema_version": 4,
         "standing_tiers": [1],
+        "standing_run_spec_digests": [],
         "targets": [
             {
                 "behavior": TARGET_BEHAVIOR,
@@ -228,8 +229,8 @@ def test_policy_round_trip_rejects_invalid_interval_and_cost_classification() ->
         PolicyDocument.from_payload(payload)
 
 
-def test_policy_v2_allows_one_authority_path_but_never_tier_two_standing() -> None:
-    """A policy may be standing-only or per-run-only without widening standing authority."""
+def test_policy_allows_exact_digest_bound_tier_two_standing_authority() -> None:
+    """Tier 2 standing authority requires a finite list of exact RunSpec digests."""
     per_run_only = _policy_payload()
     per_run_only["standing_tiers"] = []
     assert PolicyDocument.from_payload(per_run_only).standing_tiers == ()
@@ -243,8 +244,45 @@ def test_policy_v2_allows_one_authority_path_but_never_tier_two_standing() -> No
     remote_standing = _policy_payload()
     remote_standing["standing_tiers"] = [2]
     remote_standing["per_run_tiers"] = []
-    with pytest.raises(ContractError, match="only local synthetic"):
+    with pytest.raises(ContractError, match="requires exact RunSpec digests"):
         PolicyDocument.from_payload(remote_standing)
+
+    remote_standing["standing_run_spec_digests"] = ["f" * 64]
+    parsed = PolicyDocument.from_payload(remote_standing)
+    assert parsed.standing_tiers == (2,)
+    assert parsed.standing_run_spec_digests == ("f" * 64,)
+
+
+def test_legacy_policy_v3_round_trip_preserves_existing_signatures() -> None:
+    """Existing schema-v3 policies remain parseable without changing canonical bytes."""
+    payload = _policy_payload()
+    payload["schema_version"] = 3
+    payload.pop("standing_run_spec_digests")
+
+    parsed = PolicyDocument.from_payload(payload)
+
+    assert parsed.schema_version == 3
+    assert parsed.standing_run_spec_digests == ()
+    assert parsed.to_payload() == payload
+
+    payload["standing_tiers"] = [2]
+    payload["per_run_tiers"] = []
+    with pytest.raises(ContractError, match="legacy standing_tiers"):
+        PolicyDocument.from_payload(payload)
+
+
+def test_standing_run_spec_digests_require_tier_two_and_unique_values() -> None:
+    """Campaign allowlists cannot float outside Tier 2 or contain duplicate specs."""
+    payload = _policy_payload()
+    payload["standing_run_spec_digests"] = ["f" * 64]
+    with pytest.raises(ContractError, match="require standing Tier 2"):
+        PolicyDocument.from_payload(payload)
+
+    payload["standing_tiers"] = [2]
+    payload["per_run_tiers"] = []
+    payload["standing_run_spec_digests"] = ["f" * 64, "f" * 64]
+    with pytest.raises(ContractError, match="must be unique"):
+        PolicyDocument.from_payload(payload)
 
 
 def test_contract_timestamp_rejects_impossible_calendar_date() -> None:

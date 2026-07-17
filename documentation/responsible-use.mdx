@@ -46,9 +46,11 @@ Use findings to improve the security posture of the systems you are responsible 
 ## Agent-operable deployment
 
 On source `main`, an AI caller may use `ctpf experiment control` only inside authority a human
-created with `ctpf experiment govern`. Query-only `capabilities` and `validate` come first. Standing
-policy and per-run approvals bound scenarios, targets, networks, budgets, and effects before any
-effect boundary. Proxy, replay, and free-form target mutation stay human-operated.
+created with `ctpf experiment govern`. Query-only `capabilities` and `validate` come first. A finite
+campaign policy may authorize exact bounded-remote RunSpec digests once, letting the agent operate
+them without per-run intervention. Per-run approvals remain available for stricter campaigns.
+Scenarios, targets, networks, budgets, and effects are still bound before any effect boundary.
+Proxy, replay, and free-form target mutation stay human-operated.
 
 Deploy the agent under an external OS/runtime sandbox and tool allowlist. CTPF binds local listeners
 to `127.0.0.1` and does not claim full-shell containment. API keys belong in the OS keyring. See

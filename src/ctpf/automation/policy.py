@@ -77,6 +77,12 @@ def evaluate_policy(  # noqa: PLR0911 - explicit fail-closed guard sequence
         return _denied(reason, spec_digest, digest)
     if not reservations.is_within(spec.limits):
         return _denied("requested_limits_below_minimum", spec_digest, digest, reservations)
+    if (
+        spec.requested_tier == AuthorizationTier.BOUNDED_REMOTE
+        and spec.requested_tier in policy.standing_tiers
+        and spec_digest not in policy.standing_run_spec_digests
+    ):
+        return _denied("standing_run_spec_not_authorized", spec_digest, digest, reservations)
     kind = _decision_kind(spec.requested_tier, policy)
     if kind is None:
         return _denied("tier_not_authorized", spec_digest, digest, reservations)

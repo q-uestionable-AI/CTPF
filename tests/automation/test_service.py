@@ -18,6 +18,7 @@ from ctpf import driven_inference
 from ctpf.automation import approval
 from ctpf.automation import control as execution_control
 from ctpf.automation import service as automation_service
+from ctpf.automation.canonical import sha256_digest
 from ctpf.automation.contracts import (
     AuthorizationTier,
     AutomationRunState,
@@ -100,7 +101,12 @@ def _target(network: NetworkClass) -> TargetPolicy:
     )
 
 
-def _material(tmp_path: Path, tier: AuthorizationTier) -> tuple[PolicyDocument, RunSpec, Path]:
+def _material(
+    tmp_path: Path,
+    tier: AuthorizationTier,
+    *,
+    standing_remote: bool = False,
+) -> tuple[PolicyDocument, RunSpec, Path]:
     capability = scenario_capability("pattern2")
     network = (
         NetworkClass.LOOPBACK
@@ -142,6 +148,13 @@ def _material(tmp_path: Path, tier: AuthorizationTier) -> tuple[PolicyDocument, 
         output_root_id="research-evidence",
         limits=_limits(),
     )
+    if standing_remote:
+        policy = replace(
+            policy,
+            standing_tiers=(AuthorizationTier.BOUNDED_REMOTE,),
+            per_run_tiers=(),
+            standing_run_spec_digests=(sha256_digest(spec.to_payload()),),
+        )
     return policy, spec, output_root
 
 
@@ -197,6 +210,26 @@ def test_standing_start_is_idempotent_and_cancel_has_no_research_effect(
     with get_readonly_connection(db_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM automation_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM automation_grants").fetchone()[0] == 1
+
+
+def test_legacy_schema_three_policy_remains_usable(
+    tmp_path: Path,
+    fake_keyring: dict[str, str],
+) -> None:
+    """An existing schema-v3 signature keeps its original Tier 1 authority after upgrade."""
+    db_path = tmp_path / "ctpf.db"
+    policy, spec, _output_root = _material(tmp_path, AuthorizationTier.LOCAL_SYNTHETIC)
+    legacy = replace(policy, schema_version=3)
+    service = AutomationService(db_path=db_path)
+    approval.initialize_approval_key()
+
+    service.create_policy(legacy, now=NOW)
+    validation = service.validate(spec, now=NOW)
+    started = service.start(spec, now=NOW)
+
+    assert validation.policy.policy.schema_version == 3
+    assert validation.decision.kind == DecisionKind.ALLOWED_STANDING_POLICY
+    assert started["state"] == AutomationRunState.READY.value
 
 
 def test_concurrent_standing_starts_reuse_one_ready_run(
@@ -261,6 +294,34 @@ def test_tier_two_requires_exact_human_approval_and_rejects_replay(
         "approval_invalid",
         lambda: service.start(changed, approval_id=approval_id, now=NOW),
     )
+    assert not output_root.exists()
+
+
+def test_tier_two_campaign_starts_exact_spec_without_per_run_approval(
+    tmp_path: Path,
+    fake_keyring: dict[str, str],
+) -> None:
+    """One signed campaign starts its allowlisted remote RunSpec exactly once."""
+    db_path = tmp_path / "ctpf.db"
+    policy, spec, output_root = _material(
+        tmp_path,
+        AuthorizationTier.BOUNDED_REMOTE,
+        standing_remote=True,
+    )
+    service = AutomationService(db_path=db_path)
+    approval.initialize_approval_key()
+    service.create_policy(policy, now=NOW)
+
+    validation = service.validate(spec, now=NOW)
+    assert validation.decision.kind == DecisionKind.ALLOWED_STANDING_POLICY
+    first = service.start(spec, now=NOW)
+    second = service.start(spec, now=NOW)
+    changed = replace(spec, idempotency_key="agent-request-0002")
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert first["run_id"] == second["run_id"]
+    _assert_control_error("policy_denied", lambda: service.start(changed, now=NOW))
     assert not output_root.exists()
 
 
