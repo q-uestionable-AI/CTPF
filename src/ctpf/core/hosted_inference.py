@@ -35,6 +35,12 @@ TLS_POLICY = "system trust and requested-host verification"
 _ALLOWED_PATH = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=:@/"
 )
+_APPROVED_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 SocketOption = (
     tuple[int, int, int] | tuple[int, int, bytes | bytearray] | tuple[int, int, None, int]
 )
@@ -136,11 +142,18 @@ class HostedResponse:
     evidence: dict[str, Any]
 
 
-def canonicalize_endpoint(raw: str) -> CanonicalEndpoint:
+def canonicalize_endpoint(
+    raw: str,
+    *,
+    declared_network_class: str | None = None,
+) -> CanonicalEndpoint:
     """Normalize and validate an OpenAI-compatible API base URL.
 
     Args:
         raw: Operator-declared endpoint.
+        declared_network_class: Optional explicit network authority. Private
+            HTTPS requires ``https_private``; public HTTPS and loopback remain
+            safely inferable when omitted.
 
     Returns:
         Canonical endpoint authority.
@@ -163,7 +176,7 @@ def canonicalize_endpoint(raw: str) -> CanonicalEndpoint:
     scheme = parsed.scheme.lower()
     host = _canonical_host(parsed.hostname or "")
     effective_port = port or (443 if scheme == "https" else 80)
-    network_class = _network_class(scheme, host)
+    network_class = _network_class(scheme, host, declared_network_class)
     base_path = _canonical_path(parsed.path)
     authority = _authority(host, effective_port, scheme)
     origin = f"{scheme}://{authority}"
@@ -518,7 +531,7 @@ def _canonical_host(raw: str) -> str:
         raise ValueError("inference endpoint hostname is invalid") from exc
     labels = encoded.split(".")
     if len(labels) < 2 or any(not label or len(label) > 63 for label in labels):
-        raise ValueError("public HTTPS endpoint requires a valid fully qualified hostname")
+        raise ValueError("HTTPS endpoint requires a valid fully qualified hostname")
     return encoded
 
 
@@ -532,12 +545,20 @@ def _canonical_path(raw: str) -> str:
     return raw.rstrip("/")
 
 
-def _network_class(scheme: str, host: str) -> str:
+def _network_class(scheme: str, host: str, declared: str | None) -> str:
     address = _ip_address(host)
     if address is not None and _is_exact_loopback(address):
+        if declared not in {None, "loopback"}:
+            raise ValueError("loopback endpoint conflicts with its declared network class")
         return "loopback"
     if scheme != "https":
         raise ValueError("non-loopback inference endpoints must use HTTPS")
+    if declared == "https_private":
+        if address is not None:
+            raise ValueError("private HTTPS endpoints require a fully qualified hostname")
+        return declared
+    if declared not in {None, "https_public"}:
+        raise ValueError("inference endpoint has an unsupported declared network class")
     if address is not None and not _is_approved_global(address):
         raise ValueError("HTTPS endpoint IP must be globally routable")
     return "https_public"
@@ -564,6 +585,9 @@ def _validated_addresses(raw: Sequence[str], network_class: str) -> tuple[str, .
     if network_class == "loopback":
         if not all(_is_exact_loopback(address) for address in parsed):
             raise ValueError("loopback endpoint resolved outside its exact authority")
+    elif network_class == "https_private":
+        if not all(_is_approved_private(address) for address in parsed):
+            raise ValueError("private endpoint resolution included a non-private address")
     elif not all(_is_approved_global(address) for address in parsed):
         raise ValueError("public endpoint resolution included a non-global address")
     return tuple(sorted((str(address) for address in parsed), key=_address_sort_key))
@@ -594,6 +618,10 @@ def _is_approved_global(address: ipaddress.IPv4Address | ipaddress.IPv6Address) 
     return address.is_global and not (
         isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None
     )
+
+
+def _is_approved_private(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(address in network for network in _APPROVED_PRIVATE_NETWORKS)
 
 
 def _address_sort_key(raw: str) -> tuple[int, bytes]:

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from ctpf import driven_inference
-from ctpf.automation.contracts import BillingClass, DataEgressClass
+from ctpf.automation.contracts import BillingClass, DataEgressClass, NetworkClass
 from ctpf.core.db import create_target, get_connection
 from ctpf.core.llm import NormalizedResponse, ToolCall, ToolSpec
 from ctpf.driven_inference import (
@@ -181,6 +181,7 @@ class TestTargetProfile:
         profile = load_openai_target_profile(target_id[:8], db_path=db_path)
 
         assert profile.endpoint == "https://models.example.test/v1"
+        assert profile.network_class == NetworkClass.HTTPS_PUBLIC
         assert profile.model == "model-a"
         assert profile.max_tokens == 512
         assert profile.generation_parameters() == {
@@ -210,6 +211,34 @@ class TestTargetProfile:
             )
 
         with pytest.raises(DrivenInferenceError, match=r"max_tokens.*integer"):
+            load_openai_target_profile(target_id[:8], db_path=db_path)
+
+    @pytest.mark.parametrize("network_class", [[], {}])
+    def test_rejects_malformed_network_class_metadata(
+        self,
+        tmp_path: Path,
+        network_class: object,
+    ) -> None:
+        db_path = tmp_path / "ctpf.db"
+        with get_connection(db_path) as conn:
+            target_id = create_target(
+                conn,
+                type="inference",
+                name="bad remote",
+                uri="https://models.example.test/v1",
+                metadata={
+                    "driver": "openai-compatible",
+                    "model": "model-a",
+                    "credential": "remote-a",
+                    "network_class": network_class,
+                    "billing_class": "unmetered",
+                    "data_egress_class": "packaged_synthetic_remote",
+                    "retention_acknowledged": True,
+                    "residual_cost_acknowledged": True,
+                },
+            )
+
+        with pytest.raises(DrivenInferenceError, match=r"non-empty 'network_class'"):
             load_openai_target_profile(target_id[:8], db_path=db_path)
 
     def test_rejects_unsupported_reasoning_effort(self, tmp_path: Path) -> None:

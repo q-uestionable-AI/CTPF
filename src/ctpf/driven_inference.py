@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar, cast
 
-from ctpf.automation.contracts import BillingClass, DataEgressClass
+from ctpf.automation.contracts import BillingClass, DataEgressClass, NetworkClass
 from ctpf.core.config import get_keyring_credential
 from ctpf.core.db import get_connection, get_target
 from ctpf.core.hosted_inference import MAX_INPUT_TOKENS, CanonicalEndpoint, canonicalize_endpoint
@@ -23,7 +23,7 @@ DEFAULT_MAX_ROUNDS = 12
 MAX_TOOL_CALLS_PER_SESSION = 12
 _MCP_CONNECT_TIMEOUT_SECONDS = 10.0
 _REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
-_AuthorityEnumT = TypeVar("_AuthorityEnumT", BillingClass, DataEgressClass)
+_AuthorityEnumT = TypeVar("_AuthorityEnumT", BillingClass, DataEgressClass, NetworkClass)
 
 
 class DrivenInferenceError(RuntimeError):
@@ -69,6 +69,8 @@ class OpenAICompatibleTargetProfile:
         data_egress_class: Approved class of data sent to the endpoint.
         retention_acknowledged: Operator acknowledgement of provider retention/privacy.
         residual_cost_acknowledged: Operator acknowledgement of provider-side residual cost.
+        network_class: Explicit network authority. Required for private HTTPS;
+            safely inferred for loopback and public HTTPS when omitted.
     """
 
     target_id: str
@@ -86,6 +88,12 @@ class OpenAICompatibleTargetProfile:
     data_egress_class: DataEgressClass = DataEgressClass.LOCAL_ONLY
     retention_acknowledged: bool = False
     residual_cost_acknowledged: bool = False
+    network_class: NetworkClass | None = None
+
+    def canonical_endpoint(self) -> CanonicalEndpoint:
+        """Return the endpoint bound to its declared network authority."""
+        declared = self.network_class.value if self.network_class is not None else None
+        return canonicalize_endpoint(self.endpoint, declared_network_class=declared)
 
     def generation_parameters(self) -> dict[str, int | float | str]:
         """Return supported fixed generation parameters for provider calls."""
@@ -115,6 +123,7 @@ class OpenAICompatibleTargetProfile:
             "data_egress_class": self.data_egress_class.value,
             "retention_acknowledged": self.retention_acknowledged,
             "residual_cost_acknowledged": self.residual_cost_acknowledged,
+            "network_class": self.canonical_endpoint().network_class,
         }
 
 
@@ -162,10 +171,11 @@ def load_openai_target_profile(
 def _profile_from_target(target: Target) -> OpenAICompatibleTargetProfile:
     if target.type != "inference":
         raise DrivenInferenceError("driven inference requires a target with type 'inference'")
-    endpoint = _canonical_endpoint(target.uri)
     metadata = target.metadata
     if not isinstance(metadata, dict):
         raise DrivenInferenceError("inference target metadata must be a JSON object")
+    declared_network_class = _declared_network_class(metadata)
+    endpoint = _canonical_endpoint(target.uri, declared_network_class)
     driver = _required_string(metadata, "driver")
     if driver != _DRIVER_NAME:
         raise DrivenInferenceError(f"unsupported inference driver: {driver!r}")
@@ -186,16 +196,34 @@ def _profile_from_target(target: Target) -> OpenAICompatibleTargetProfile:
         data_egress_class=authority[2],
         retention_acknowledged=authority[3],
         residual_cost_acknowledged=authority[4],
+        network_class=NetworkClass(endpoint.network_class),
     )
 
 
-def _canonical_endpoint(raw: str | None) -> CanonicalEndpoint:
+def _canonical_endpoint(
+    raw: str | None,
+    declared_network_class: NetworkClass | None,
+) -> CanonicalEndpoint:
     if not isinstance(raw, str) or not raw.strip():
         raise DrivenInferenceError("inference target URI must contain an API base URL")
     try:
-        return canonicalize_endpoint(raw.strip().rstrip("/"))
+        declared = declared_network_class.value if declared_network_class is not None else None
+        return canonicalize_endpoint(
+            raw.strip().rstrip("/"),
+            declared_network_class=declared,
+        )
     except ValueError as exc:
         raise DrivenInferenceError(str(exc)) from exc
+
+
+def _declared_network_class(metadata: dict[str, Any]) -> NetworkClass | None:
+    value = metadata.get("network_class")
+    if value is None or value == "":
+        return None
+    parsed = _enum_metadata(metadata, "network_class", NetworkClass)
+    if parsed == NetworkClass.EXTERNAL_RUNTIME:
+        raise DrivenInferenceError("inference target network_class cannot be external_runtime")
+    return parsed
 
 
 def _required_string(metadata: dict[str, Any], key: str) -> str:
@@ -251,13 +279,13 @@ def _authority_metadata(
     egress = _enum_metadata(metadata, "data_egress_class", DataEgressClass)
     if egress != DataEgressClass.PACKAGED_SYNTHETIC_REMOTE:
         raise DrivenInferenceError(
-            "public inference targets require packaged_synthetic_remote data egress"
+            "non-loopback inference targets require packaged_synthetic_remote data egress"
         )
     retention = _required_bool(metadata, "retention_acknowledged")
     residual = _required_bool(metadata, "residual_cost_acknowledged")
     if not retention or not residual:
         raise DrivenInferenceError(
-            "public inference targets require retention and residual-cost acknowledgements"
+            "non-loopback inference targets require retention and residual-cost acknowledgements"
         )
     return billing, ceiling, egress, retention, residual
 
@@ -431,7 +459,7 @@ class OpenAICompatibleDriver:
         from ctpf.core.llm_openai import OpenAICompatibleClient
 
         client = OpenAICompatibleClient(
-            endpoint=self._profile.endpoint,
+            endpoint=self._profile.canonical_endpoint(),
             api_key=credential,
             requested_model=self._profile.model,
             generation_parameters=self._profile.generation_parameters(),

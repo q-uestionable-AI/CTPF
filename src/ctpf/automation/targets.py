@@ -355,6 +355,7 @@ def _inference_profile_from_behavior(
         data_egress_class=target.data_egress_class,
         retention_acknowledged=target.retention_acknowledged,
         residual_cost_acknowledged=target.residual_cost_acknowledged,
+        network_class=target.network_class,
     )
 
 
@@ -376,28 +377,29 @@ def _runtime_profile_from_behavior(
     )
 
 
-def classify_inference_endpoint(endpoint: str) -> NetworkClass:
+def classify_inference_endpoint(
+    endpoint: str,
+    *,
+    declared_network_class: NetworkClass | None = None,
+) -> NetworkClass:
     """Classify one normalized inference endpoint for the initial policy.
 
     Args:
         endpoint: Absolute OpenAI-compatible API base URL.
 
     Returns:
-        Loopback or public-HTTPS network class.
+        Loopback, private-HTTPS, or public-HTTPS network class.
 
     Raises:
         TargetIdentityError: If the endpoint requires an unsupported network
             authority or contains ambiguous URL components.
     """
     try:
-        canonical = canonicalize_endpoint(endpoint)
+        declared = declared_network_class.value if declared_network_class is not None else None
+        canonical = canonicalize_endpoint(endpoint, declared_network_class=declared)
     except ValueError as exc:
         raise TargetIdentityError(str(exc)) from exc
-    return (
-        NetworkClass.LOOPBACK
-        if canonical.network_class == NetworkClass.LOOPBACK.value
-        else NetworkClass.HTTPS_PUBLIC
-    )
+    return NetworkClass(canonical.network_class)
 
 
 def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
@@ -444,8 +446,8 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
 
 def _inference_identity(profile: OpenAICompatibleTargetProfile) -> TargetIdentity:
     generation = profile.generation_parameters()
-    endpoint = canonicalize_endpoint(profile.endpoint)
-    network_class = classify_inference_endpoint(endpoint.normalized_url)
+    endpoint = profile.canonical_endpoint()
+    network_class = NetworkClass(endpoint.network_class)
     _validate_inference_profile_authority(profile, network_class)
     behavior = {
         "authority_contract_version": 1,
@@ -574,7 +576,7 @@ def _validate_inference_snapshot(
         raise TargetIdentityError("policy inference driver is unsupported")
     _require_installed_driver_hash(behavior["driver_source_hash"], Path(driven_inference.__file__))
     endpoint = _validate_endpoint_snapshot(behavior["endpoint"])
-    if classify_inference_endpoint(endpoint.normalized_url) != network_class:
+    if NetworkClass(endpoint.network_class) != network_class:
         raise TargetIdentityError("policy inference network class does not match its endpoint")
     _require_text(behavior["model"], "model")
     _require_text(behavior["credential_alias"], "credential_alias")
@@ -686,8 +688,18 @@ def _validate_endpoint_snapshot(raw: Any) -> hosted_inference.CanonicalEndpoint:
         raise TargetIdentityError("policy inference endpoint must be an object")
     _require_behavior_keys(raw, _ENDPOINT_KEYS)
     normalized = _require_text(raw["normalized_url"], "endpoint.normalized_url")
+    declared = _require_text(raw["network_class"], "endpoint.network_class")
     try:
-        endpoint = canonicalize_endpoint(normalized)
+        network_class = NetworkClass(declared)
+    except ValueError as exc:
+        raise TargetIdentityError(str(exc)) from exc
+    if network_class == NetworkClass.EXTERNAL_RUNTIME:
+        raise TargetIdentityError("external runtime is not an inference endpoint network class")
+    try:
+        endpoint = canonicalize_endpoint(
+            normalized,
+            declared_network_class=network_class.value,
+        )
     except ValueError as exc:
         raise TargetIdentityError(str(exc)) from exc
     if raw != endpoint.to_payload():

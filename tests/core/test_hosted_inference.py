@@ -26,6 +26,7 @@ from ctpf.core.hosted_inference import (
 )
 
 _PUBLIC_ADDRESS = "93.184.216.34"
+_PRIVATE_ADDRESS = "10.0.40.50"
 
 
 async def _public_resolver(_host: str, _port: int) -> Sequence[str]:
@@ -85,6 +86,21 @@ def test_canonical_endpoint_normalizes_complete_authority(
     assert endpoint.origin in normalized
 
 
+def test_private_https_requires_an_explicit_fqdn_authority() -> None:
+    endpoint = canonicalize_endpoint(
+        "https://INFERENCE-GATEWAY.mlsecopslab.io:443/v1/",
+        declared_network_class="https_private",
+    )
+
+    assert endpoint.normalized_url == "https://inference-gateway.mlsecopslab.io/v1"
+    assert endpoint.network_class == "https_private"
+    with pytest.raises(ValueError, match="fully qualified hostname"):
+        canonicalize_endpoint(
+            "https://10.0.40.50/v1",
+            declared_network_class="https_private",
+        )
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -111,6 +127,26 @@ async def test_resolution_rejects_non_global_and_mixed_address_sets() -> None:
         return (_PUBLIC_ADDRESS, "10.0.0.1")
 
     with pytest.raises(ValueError, match="non-global"):
+        await resolve_endpoint(endpoint, mixed)
+
+
+async def test_private_resolution_accepts_only_private_rfc1918_or_ula_addresses() -> None:
+    endpoint = canonicalize_endpoint(
+        "https://inference-gateway.mlsecopslab.io/v1",
+        declared_network_class="https_private",
+    )
+
+    async def private(_host: str, _port: int) -> Sequence[str]:
+        return (_PRIVATE_ADDRESS,)
+
+    async def mixed(_host: str, _port: int) -> Sequence[str]:
+        return (_PRIVATE_ADDRESS, _PUBLIC_ADDRESS)
+
+    resolution = await resolve_endpoint(endpoint, private)
+
+    assert resolution.addresses == (_PRIVATE_ADDRESS,)
+    assert resolution.selected_address == _PRIVATE_ADDRESS
+    with pytest.raises(ValueError, match="non-private"):
         await resolve_endpoint(endpoint, mixed)
 
 
