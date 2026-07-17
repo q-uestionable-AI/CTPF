@@ -13,7 +13,7 @@ platform, or workflow orchestrator.
 | Layer | Responsibility | Location |
 | --- | --- | --- |
 | Research thesis | Define the capability-trust question and publication claims | Research program outside the repository |
-| Human governance | Sign policy/approvals; authorize targets, spend, science, and publication | `ctpf experiment govern` (TTY) |
+| Human governance | Sign finite campaign policy; authorize targets, spend, science, and publication | `ctpf experiment govern` (TTY) |
 | Agent-operable control | Untrusted machine lifecycle over exact contracts | `ctpf experiment control` (source `main`) |
 | Stable harness | Condition isolation, protocol capture, trust-transition records, comparison, effect verification, and evidence integrity | Reusable `ctpf` package |
 | Study instrument | Scenario task, prompt, fixture, intervention, authority semantics, and oracle expectations | Narrow scenario modules and tests |
@@ -37,7 +37,8 @@ platform, or workflow orchestrator.
 | `audit` | Frozen secondary enumeration/scanner library; not a root CLI or method contribution |
 
 The public operator entry point is `ctpf`. Its research command is `ctpf experiment`. On source
-`main`, `control` is the autonomous surface and `govern` is the human authority surface. Proxy,
+`main`, `control` is the autonomous surface and `govern` establishes finite campaign authority.
+Exact bounded-remote RunSpec digests can then execute without per-run intervention. Proxy,
 targets, stored operational records, configuration, and database commands support that work and are
 not the default autonomous entry. See [Agent-Operable Lifecycle](/experiments/agent-operable).
 

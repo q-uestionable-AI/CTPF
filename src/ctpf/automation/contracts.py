@@ -17,7 +17,8 @@ from ctpf.automation.canonical import (
 )
 
 RUN_SPEC_SCHEMA_VERSION = 2
-POLICY_SCHEMA_VERSION = 3
+POLICY_SCHEMA_VERSION = 4
+LEGACY_POLICY_SCHEMA_VERSION = 3
 GRANT_SCHEMA_VERSION = 2
 # Backward-compatible public name for the original RunSpec schema version.
 SCHEMA_VERSION = RUN_SPEC_SCHEMA_VERSION
@@ -359,12 +360,13 @@ class PolicyDocument:
     output_roots: tuple[OutputRootPolicy, ...]
     allowed_effects: tuple[str, ...]
     limits: PolicyLimits
+    standing_run_spec_digests: tuple[str, ...] = ()
     schema_version: int = POLICY_SCHEMA_VERSION
     canonicalization: str = CANONICALIZATION_ID
 
     def to_payload(self) -> dict[str, Any]:
         """Return the normalized canonical policy object."""
-        return {
+        payload: dict[str, Any] = {
             "allowed_effects": list(self.allowed_effects),
             "canonicalization": self.canonicalization,
             "created_at": self.created_at,
@@ -379,41 +381,15 @@ class PolicyDocument:
             "standing_tiers": [int(tier) for tier in self.standing_tiers],
             "targets": [target.to_payload() for target in self.targets],
         }
+        if self.schema_version >= POLICY_SCHEMA_VERSION:
+            payload["standing_run_spec_digests"] = list(self.standing_run_spec_digests)
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> Self:
         """Parse a strict signed-policy body."""
-        required = {
-            "schema_version",
-            "canonicalization",
-            "policy_id",
-            "name",
-            "created_at",
-            "expires_at",
-            "standing_tiers",
-            "per_run_tiers",
-            "scenarios",
-            "targets",
-            "output_roots",
-            "allowed_effects",
-            "limits",
-        }
-        _require_shape(payload, required=required)
-        _validate_header(payload, POLICY_SCHEMA_VERSION)
-        standing = _tier_list(payload["standing_tiers"], "standing_tiers", allow_empty=True)
-        per_run = _tier_list(payload["per_run_tiers"], "per_run_tiers", allow_empty=True)
-        if not standing and not per_run:
-            raise ContractError("policy must authorize at least one execution tier")
-        if set(standing).intersection(per_run):
-            raise ContractError("standing_tiers and per_run_tiers must not overlap")
-        if any(tier != AuthorizationTier.LOCAL_SYNTHETIC for tier in standing):
-            raise ContractError("standing_tiers may contain only local synthetic authority")
-        allowed_per_run = {
-            AuthorizationTier.LOCAL_SYNTHETIC,
-            AuthorizationTier.BOUNDED_REMOTE,
-        }
-        if any(tier not in allowed_per_run for tier in per_run):
-            raise ContractError("per_run_tiers may contain only executable Tier 1 or Tier 2")
+        version = _policy_version(payload)
+        standing, per_run, standing_specs = _parse_policy_authority(payload, version)
         created_at = _timestamp(payload["created_at"], "created_at")
         expires_at = _timestamp(payload["expires_at"], "expires_at")
         if created_at >= expires_at:
@@ -430,7 +406,82 @@ class PolicyDocument:
             output_roots=_parse_output_roots(payload["output_roots"]),
             allowed_effects=_safe_id_list(payload["allowed_effects"], "allowed_effects"),
             limits=_parse_policy_limits(payload["limits"]),
+            standing_run_spec_digests=standing_specs,
+            schema_version=version,
         )
+
+
+def _policy_version(payload: dict[str, Any]) -> int:
+    required = {
+        "schema_version",
+        "canonicalization",
+        "policy_id",
+        "name",
+        "created_at",
+        "expires_at",
+        "standing_tiers",
+        "per_run_tiers",
+        "scenarios",
+        "targets",
+        "output_roots",
+        "allowed_effects",
+        "limits",
+    }
+    version = payload.get("schema_version")
+    if version == POLICY_SCHEMA_VERSION:
+        required.add("standing_run_spec_digests")
+    elif version != LEGACY_POLICY_SCHEMA_VERSION:
+        raise ContractError(
+            f"schema_version must be {LEGACY_POLICY_SCHEMA_VERSION} or {POLICY_SCHEMA_VERSION}"
+        )
+    _require_shape(payload, required=required)
+    if payload.get("canonicalization") != CANONICALIZATION_ID:
+        raise ContractError(f"canonicalization must be {CANONICALIZATION_ID!r}")
+    return (
+        POLICY_SCHEMA_VERSION if version == POLICY_SCHEMA_VERSION else LEGACY_POLICY_SCHEMA_VERSION
+    )
+
+
+def _parse_policy_authority(
+    payload: dict[str, Any],
+    version: int,
+) -> tuple[tuple[AuthorizationTier, ...], tuple[AuthorizationTier, ...], tuple[str, ...]]:
+    standing = _tier_list(payload["standing_tiers"], "standing_tiers", allow_empty=True)
+    per_run = _tier_list(payload["per_run_tiers"], "per_run_tiers", allow_empty=True)
+    standing_specs: tuple[str, ...] = ()
+    if version == POLICY_SCHEMA_VERSION:
+        standing_specs = _digest_list(
+            payload["standing_run_spec_digests"],
+            "standing_run_spec_digests",
+            allow_empty=True,
+        )
+    _validate_policy_authority(version, standing, per_run, standing_specs)
+    return standing, per_run, standing_specs
+
+
+def _validate_policy_authority(
+    version: int,
+    standing: tuple[AuthorizationTier, ...],
+    per_run: tuple[AuthorizationTier, ...],
+    standing_specs: tuple[str, ...],
+) -> None:
+    executable = {AuthorizationTier.LOCAL_SYNTHETIC, AuthorizationTier.BOUNDED_REMOTE}
+    if not standing and not per_run:
+        raise ContractError("policy must authorize at least one execution tier")
+    if set(standing).intersection(per_run):
+        raise ContractError("standing_tiers and per_run_tiers must not overlap")
+    if any(tier not in executable for tier in standing):
+        raise ContractError("standing_tiers may contain only executable Tier 1 or Tier 2")
+    if version == LEGACY_POLICY_SCHEMA_VERSION and any(
+        tier != AuthorizationTier.LOCAL_SYNTHETIC for tier in standing
+    ):
+        raise ContractError("legacy standing_tiers may contain only local synthetic authority")
+    if AuthorizationTier.BOUNDED_REMOTE in standing and not standing_specs:
+        raise ContractError("standing Tier 2 requires exact RunSpec digests")
+    if standing_specs and AuthorizationTier.BOUNDED_REMOTE not in standing:
+        raise ContractError("standing RunSpec digests require standing Tier 2 authority")
+    if any(tier not in executable for tier in per_run):
+        raise ContractError("per_run_tiers may contain only executable Tier 1 or Tier 2")
 
 
 @dataclass(frozen=True)
@@ -909,8 +960,8 @@ def _canonical_object(raw: Any, label: str) -> dict[str, Any]:
     return value
 
 
-def _digest_list(raw: Any, label: str) -> tuple[str, ...]:
-    values = tuple(_digest(item, label) for item in _list(raw, label))
+def _digest_list(raw: Any, label: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    values = tuple(_digest(item, label) for item in _list(raw, label, allow_empty=allow_empty))
     _require_unique(list(values), label)
     return values
 

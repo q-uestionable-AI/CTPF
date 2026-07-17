@@ -1,22 +1,23 @@
 ---
 title: Agent-Operable Lifecycle
-description: Governed control and human govern surfaces for an untrusted AI caller
+description: Agent-operated research campaigns inside finite human-authorized envelopes
 ---
 
 Source `main` exposes a machine lifecycle for an autonomous AI caller and a separate
 TTY-only human governance surface. Neither is part of public PyPI `v0.14.0`. Do not treat this
 page as a release commitment.
 
-The harness is intended primarily for an AI agent and secondarily for a human operator. Humans
-retain target and policy approval, spend and risk authority, scientific adjudication, and
-publication. Mechanical results are not research conclusions.
+The harness is intended primarily for an AI research agent and secondarily for direct human
+operation and validation. A human authorizes the finite campaign envelope once; the agent then
+operates its listed runs, evidence lifecycle, and mechanical findings without stepwise approvals.
+Humans retain scope, spend and risk authority, scientific adjudication, and publication.
 
 ## Surfaces
 
 | Surface | Role | Who |
 | --- | --- | --- |
 | `ctpf experiment control` | Query-only discovery, validate, start, execute, status, cancel, result, verify | Autonomous caller |
-| `ctpf experiment govern` | Signing key, signed policy, and per-run approval | Human on an interactive TTY |
+| `ctpf experiment govern` | Signing key, finite campaign policy, and exceptional per-run approval | Human on an interactive TTY |
 | `ctpf experiment run` | Direct human-operated packaged experiments | Human |
 
 Adapters (MCP, Skills, plugins) are optional later convenience layers. They receive no independent
@@ -33,8 +34,9 @@ uv run ctpf experiment control validate < runspec.json
 ```
 
 `capabilities` and `validate` are query-only. They must not create research output or mutate
-authority. A human creates signed policy (and, for higher tiers, approval) through `govern` before
-the agent may `start` or `execute`.
+authority. A human creates one signed policy through `govern`. For a bounded-remote campaign, the
+policy contains the exact RunSpec digests the agent may start; no listed digest may be changed or
+used to create a second run.
 
 ```bash
 uv run ctpf experiment control start < runspec.json
@@ -51,9 +53,11 @@ before effect boundaries.
 
 - **RunSpec** — canonical JSON request bound by digest into grants and runs. Unknown fields fail
   closed. There is no arbitrary URL, shell, proxy, or replay field on this surface.
-- **Policy** — human-signed standing or per-run authority: scenarios, target fingerprints, output
-  roots, effect allowlists, resource ceilings, and authorization tiers.
-- **Approval** — for higher tiers, a human-signed grant bound to one exact RunSpec digest.
+- **Policy** — human-signed campaign authority: scenarios, target fingerprints, output roots,
+  effect allowlists, resource ceilings, authorization tiers, and the finite exact-RunSpec allowlist
+  required for standing bounded-remote work.
+- **Approval** — an optional stricter per-run grant bound to one exact RunSpec digest when policy
+  deliberately chooses per-run rather than campaign authority.
 - **Target identity** — full target ID plus validated-profile fingerprint; endpoint or model
   substitution denies before execution.
 - **Scenario fingerprint** — installed scenario pin; fixture or prompt drift invalidates standing
@@ -66,11 +70,12 @@ API keys stay in the OS keyring. Control envelopes carry credential aliases only
 | Tier | Meaning |
 | --- | --- |
 | Local synthetic | Standing policy may allow packaged synthetic local/loopback work |
-| Bounded remote | Requires per-run human approval and explicit remote/retention acknowledgements |
+| Bounded remote | A finite campaign may allow exact RunSpec digests; per-run approval remains available as a stricter choice. Remote/retention acknowledgements and resource ceilings are mandatory. |
 | Higher / human-only | Proxy replay, arbitrary targets, and destructive authority stay off the autonomous surface |
 
-Exact tier names and policy fields are defined by the installed contracts. If validation denies,
-fix the policy or approval; do not retry by mutating the rejected RunSpec.
+Exact tier names and policy fields are defined by the installed contracts. An unlisted digest is
+denied before a run or effect exists. If validation denies, correct the proposed campaign through
+the human governance surface; the agent must not mutate a rejected RunSpec to gain authority.
 
 ## Evidence and verification
 

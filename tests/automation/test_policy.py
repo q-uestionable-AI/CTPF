@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 
+from ctpf.automation.canonical import sha256_digest
 from ctpf.automation.contracts import (
     AuthorizationTier,
     BillingClass,
@@ -294,6 +295,27 @@ def test_remote_metered_target_requires_tier_two_and_reserves_cost() -> None:
 
     assert decision.kind == DecisionKind.APPROVAL_REQUIRED
     assert decision.minimum_reservations.cost_limit_microusd == 900_000
+
+
+def test_exact_digest_bound_remote_spec_uses_standing_campaign_authority() -> None:
+    """A signed campaign may authorize one exact bounded-remote RunSpec without per-run approval."""
+    target_policy = _target_policy(network=NetworkClass.HTTPS_PRIVATE)
+    identity = _identity(network=NetworkClass.HTTPS_PRIVATE)
+    spec = _spec(requested_tier=AuthorizationTier.BOUNDED_REMOTE)
+    policy = replace(
+        _policy(target=target_policy),
+        standing_tiers=(AuthorizationTier.BOUNDED_REMOTE,),
+        per_run_tiers=(),
+        standing_run_spec_digests=(sha256_digest(spec.to_payload()),),
+    )
+
+    allowed = evaluate_policy(spec, policy, _capability(), (identity,), now=NOW)
+    changed = replace(spec, idempotency_key="agent-request-0002")
+    denied = evaluate_policy(changed, policy, _capability(), (identity,), now=NOW)
+
+    assert allowed.kind == DecisionKind.ALLOWED_STANDING_POLICY
+    assert denied.kind == DecisionKind.DENIED
+    assert denied.reason_code == "standing_run_spec_not_authorized"
 
 
 @pytest.mark.parametrize(

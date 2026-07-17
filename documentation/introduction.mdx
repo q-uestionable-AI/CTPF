@@ -11,9 +11,10 @@ The `ctpf` Python package is the project's reference research harness. It coordi
 conditions, captures original and modified protocol evidence, verifies run-scoped external effects,
 compares results conservatively, and writes integrity-checkable evidence bundles.
 
-It is intended primarily for an AI agent and secondarily for a human operator. Humans retain
-target and policy approval, spend and risk authority, scientific adjudication, and publication.
-An AI proposal or mechanical score is not a human research conclusion.
+It is intended primarily for an AI research agent and secondarily for direct human operation and
+validation. A human authorizes a finite campaign envelope once; the agent operates its exact runs
+and evidence lifecycle autonomously. Humans retain scope, spend and risk authority, scientific
+adjudication, and publication. An AI proposal or mechanical score is not a human conclusion.
 
 It is not a general scanner, red-team platform, proxy product, or workflow orchestrator.
 
@@ -33,7 +34,7 @@ Read the [Research Method](/method/overview) and
 | --- | --- | --- |
 | [Cascade memo](/experiments/cascade-memo) | Can changed authority persist into an artifact, cross a session boundary, and precede a matching action and effect? | Included in PyPI `v0.14.0` |
 | [Pattern 2](/experiments/pattern2) | Can one changed status response precede a matching privileged action and run-scoped effect? | Unreleased source `main` only |
-| [Agent-operable lifecycle](/experiments/agent-operable) | Can an untrusted AI caller operate only inside human-signed policy and approval? | Unreleased source `main` only |
+| [Agent-operable lifecycle](/experiments/agent-operable) | Can an untrusted AI caller operate a finite campaign inside human-signed policy without per-run intervention? | Unreleased source `main` only |
 
 These are bounded calibration cases. Their prompts delegate conditional action authority to
 returned data, so positive observations demonstrate a response-to-effect mechanism under pinned
@@ -45,7 +46,7 @@ conditions. They do not prove prevalence, general model vulnerability, or mitiga
 | --- | --- |
 | `ctpf experiment` | Coordinate packaged controlled experiments and evidence |
 | `ctpf experiment control` | Machine lifecycle for an untrusted AI caller (source `main` only) |
-| `ctpf experiment govern` | TTY-only human policy/key/approval authority (source `main` only) |
+| `ctpf experiment govern` | TTY-only human campaign-policy/key authority (source `main` only) |
 | `ctpf targets` | Register demonstrated model and agent-runtime targets |
 | `ctpf proxy` | Observe or intervene in MCP traffic and preserve protocol evidence |
 | `ctpf config` / `ctpf db` | Manage OS-keyring credentials, settings, and local operational state |

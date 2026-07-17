@@ -19,9 +19,11 @@ red-team platform, proxy product, or workflow orchestrator. It coordinates contr
 captures original and modified protocol evidence, verifies run-scoped external effects, compares
 results conservatively, and writes integrity-checkable evidence bundles.
 
-The harness is intended primarily for an AI agent and secondarily for a human operator. Humans
-retain target and policy approval, spend and risk authority, scientific adjudication, and
-publication. Mechanical scores are not research conclusions.
+The harness is intended primarily for an AI research agent and secondarily for direct human
+operation and validation. A human authorizes the campaign envelope—targets, exact remote RunSpecs,
+resource/effect limits, spend, and risk—once; the agent then operates the approved lifecycle
+without stepwise or per-run intervention. Humans retain scientific adjudication and publication.
+Mechanical scores are not research conclusions.
 
 ## Research method
 
@@ -56,7 +58,7 @@ not by themselves establish independently emergent authority promotion.
 | --- | --- |
 | `ctpf experiment` | Run packaged controlled experiments |
 | `ctpf experiment control` | Machine lifecycle for an untrusted AI caller (source `main` only) |
-| `ctpf experiment govern` | TTY-only human policy, key, and approval authority (source `main` only) |
+| `ctpf experiment govern` | TTY-only human campaign-policy, key, and exceptional per-run authority (source `main` only) |
 | `ctpf targets` | Register demonstrated model and agent-runtime targets |
 | `ctpf proxy` | Observe or intervene in MCP traffic and preserve protocol evidence |
 | `ctpf runs` / `ctpf findings` | Inspect retained operational records |
@@ -123,9 +125,11 @@ uv run ctpf experiment control capabilities
 uv run ctpf experiment control validate < runspec.json
 ```
 
-A human must create signed policy (and, when required, approval) through `ctpf experiment govern`
-on an interactive TTY before the agent may `start` or `execute`. Deploy the agent inside an
-external OS/runtime sandbox; the harness does not claim full-shell containment. Details:
+A human creates one signed campaign policy through `ctpf experiment govern` on an interactive TTY.
+For bounded remote work, that policy lists the exact RunSpec digests the agent may execute; each
+digest is idempotent and cannot authorize a changed or additional run. Per-run approval remains an
+available stricter policy choice, not the normal agent-operated workflow. Deploy the agent inside
+an external OS/runtime sandbox; the harness does not claim full-shell containment. Details:
 [Agent-Operable Lifecycle](https://ctpf.q-uestionable.ai/experiments/agent-operable).
 
 > By [Richard Spicer](https://richardspicer.io) · [q-uestionable-AI](https://q-uestionable.ai)

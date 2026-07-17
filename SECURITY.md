@@ -22,23 +22,25 @@ CTPF Research Harness is a security testing tool. Vulnerabilities in the tool it
 - Dependency vulnerabilities with exploitable paths
 - Unsafe deserialization of findings, MCP messages, experiment evidence, or fixture payloads
 - Local proxy-listener issues including SSRF or path traversal in file outputs
-- Bypass of the agent-operable control/govern boundary on source `main` (forged policy/approval,
-  post-approval RunSpec mutation, budget or cancellation races, evidence path escape)
+- Bypass of the agent-operable control/govern boundary on source `main` (forged campaign policy or
+  approval, unlisted or post-authorization RunSpec execution, budget or cancellation races,
+  evidence path escape)
 
 Out of scope: vulnerabilities in third-party MCP servers or AI systems discovered *by* the tool — those should be reported to the relevant vendor.
 
 ## Autonomous-caller threat model
 
 Source `main` treats the AI caller as untrusted. Protected assets are the signed local policy and
-approval records, OS-keyring secrets, approved output roots, exact target and scenario fingerprints,
-resource budgets, and research evidence integrity.
+approval records, finite campaign RunSpec allowlists, OS-keyring secrets, approved output roots,
+exact target and scenario fingerprints, resource budgets, and research evidence integrity.
 
 Enforcement assumptions:
 
 - Control contracts reject unknown fields; there is no arbitrary URL, shell, or proxy command on the
   autonomous surface.
-- Policy and approval use HMAC-SHA-256 with a keyring-held local secret. A process that can read that
-  key can forge local authority; protect the host accordingly.
+- Policy and approval use HMAC-SHA-256 with a keyring-held local secret. Bounded-remote standing
+  policy authorizes only its exact RunSpec digests. A process that can read the key can forge local
+  authority; protect the host accordingly.
 - Budgets and deadlines are reserved before effect boundaries. Cancellation is durable; interrupted
   leases do not auto-resume.
 - Evidence verification establishes internal consistency only, not independent authenticity or
