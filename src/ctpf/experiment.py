@@ -62,6 +62,19 @@ from ctpf.kernel import (
     write_cascade_evidence_bundle,
     write_evidence_bundle,
 )
+from ctpf.kernel.pattern3_scope import (
+    HardenedControlResult,
+    Pattern3Condition,
+    Pattern3ExperimentContext,
+    Pattern3Observation,
+    Pattern3Scenario,
+    WorkflowAuthority,
+    classify_hardened_control,
+    read_fixture_digest,
+    score_scope_expansion,
+    write_pattern3_evidence_bundle,
+)
+from ctpf.kernel.trace import parse_pattern3_trace
 from ctpf.mcp.models import Direction, Transport
 from ctpf.proxy.intercept import InterceptDecision, InterceptEngine
 from ctpf.proxy.models import InterceptAction, ProxyMessage
@@ -91,18 +104,23 @@ PATTERN2_PROMPT = (
     "with a brief reason; otherwise report the status and stop. Do not apply changes unless "
     "status indicates authorization."
 )
+PATTERN3_PROMPT = Pattern3Scenario().user_instruction
 
 _AGENT_PIN = "Cursor Agent (cursor-vscode)"
 _DRIVEN_AGENT_PIN = "CTPF OpenAI-compatible driven-inference driver"
 _CLAUDE_CODE_AGENT_PIN = "Claude Code CLI external agent runtime"
 _FIXTURE_WORK_DIRNAME = "ctpf-cascade-memo"
 _PATTERN2_FIXTURE_WORK_DIRNAME = "ctpf-pattern2"
+_PATTERN3_FIXTURE_WORK_DIRNAME = "ctpf-pattern3-scope"
 _CASCADE_SCENARIO_ID = "cascade-memo"
 _PATTERN2_SCENARIO_ID = "pattern2"
+_PATTERN3_SCENARIO_ID = "pattern3-scope"
 _CASCADE_MCP_SERVER_NAME = "ctpf-cascade"
 _PATTERN2_MCP_SERVER_NAME = "ctpf-pattern2"
+_PATTERN3_MCP_SERVER_NAME = "ctpf-pattern3-scope"
 _CASCADE_TOOL_COUNT = 6
 _PATTERN2_TOOL_COUNT = 3
+_PATTERN3_TOOL_COUNT = 3
 _LISTENER_RESTART_COOLDOWN = 5.0
 _RUNTIME_START_TIMEOUT = 10.0
 _TARGET_PROFILE_NAME = "target-profile.json"
@@ -126,6 +144,8 @@ class _Condition(StrEnum):
 
 
 _DEFAULT_CONDITION_ORDER = tuple(_Condition)
+_DEFAULT_PATTERN3_CONDITION_ORDER = tuple(Pattern3Condition)
+_ExperimentCondition = _Condition | Pattern3Condition
 
 
 @dataclass(frozen=True)
@@ -191,6 +211,27 @@ class Pattern2ExperimentResult:
     bundle: EvidenceBundle
     primary: TrustTransition
     hardened: TrustTransition
+
+
+@dataclass(frozen=True)
+class Pattern3ExperimentOptions:
+    """Inputs for one governed Pattern 3 scope-expansion series."""
+
+    model: str | None
+    output_root: Path
+    listen_port: int = DEFAULT_LISTEN_PORT
+    target: str | None = None
+    db_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class Pattern3ExperimentResult:
+    """Completed Pattern 3 series paths and mechanical results."""
+
+    root: Path
+    bundle: EvidenceBundle
+    primary: TrustTransition
+    hardened: HardenedControlResult
 
 
 @dataclass(frozen=True)
@@ -271,9 +312,20 @@ class _Pattern2ConditionFiles:
 
 
 @dataclass(frozen=True)
+class _Pattern3ConditionFiles:
+    run_id: str
+    root: Path
+    authority: Path
+    session: Path
+    inference: Path
+    sink: Path
+    observation: Path
+
+
+@dataclass(frozen=True)
 class _SessionSpec:
     scenario_id: str
-    condition: _Condition
+    condition: _ExperimentCondition
     name: str
     prompt: str
     trace_path: Path
@@ -303,6 +355,13 @@ class _Pattern2ConditionResult:
 
 
 @dataclass(frozen=True)
+class _Pattern3ConditionResult:
+    condition: Pattern3Condition
+    files: _Pattern3ConditionFiles
+    observation: Pattern3Observation
+
+
+@dataclass(frozen=True)
 class _Pattern2RunState:
     options: Pattern2ExperimentOptions
     profile: ExperimentTargetProfile | None
@@ -315,10 +374,23 @@ class _Pattern2RunState:
     control: ExecutionControl | None
 
 
+@dataclass(frozen=True)
+class _Pattern3RunState:
+    options: Pattern3ExperimentOptions
+    profile: ExperimentTargetProfile
+    fixture_command: str
+    scenario: Pattern3Scenario
+    condition_order: tuple[Pattern3Condition, ...]
+    series_root: Path
+    manifest_path: Path
+    operator: _Operator
+    control: ExecutionControl
+
+
 class _Operator(Protocol):
     async def wait_for_completion(
         self,
-        condition: _Condition,
+        condition: _ExperimentCondition,
         session_name: str,
         prompt: str,
         model: str,
@@ -339,7 +411,7 @@ class _ConsoleOperator:
 
     async def wait_for_completion(
         self,
-        condition: _Condition,
+        condition: _ExperimentCondition,
         session_name: str,
         prompt: str,
         model: str,
@@ -369,7 +441,7 @@ class _DrivenOperator:
 
     async def wait_for_completion(
         self,
-        condition: _Condition,
+        condition: _ExperimentCondition,
         session_name: str,
         prompt: str,
         model: str,
@@ -395,7 +467,7 @@ class _ClaudeCodeOperator:
 
     async def wait_for_completion(
         self,
-        condition: _Condition,
+        condition: _ExperimentCondition,
         session_name: str,
         prompt: str,
         model: str,
@@ -615,6 +687,19 @@ async def _run_governed_single(
             control=control,
         )
         return _governed_pattern2_result(control, pattern_result)
+    if spec.experiment.scenario == _PATTERN3_SCENARIO_ID:
+        pattern3_result = await run_pattern3_scope(
+            Pattern3ExperimentOptions(
+                None,
+                control.run_root.parent,
+                port,
+                target_id,
+                control.db_path,
+            ),
+            profile=profile,
+            control=control,
+        )
+        return _governed_pattern3_result(control, pattern3_result)
     raise ExperimentError("governed RunSpec selected an unsupported scenario")
 
 
@@ -651,6 +736,32 @@ def _governed_pattern2_result(
     return GovernedExperimentResult(
         manifest,
         _governed_mechanical_result(control, result, _PATTERN2_SCENARIO_ID),
+    )
+
+
+def _governed_pattern3_result(
+    control: ExecutionControl,
+    result: Pattern3ExperimentResult,
+) -> GovernedExperimentResult:
+    manifest = result.root / "run-manifest.json"
+    return GovernedExperimentResult(
+        manifest,
+        {
+            "bundle": result.bundle.root.relative_to(control.run_root).as_posix(),
+            "hardened_passed": result.hardened.passed,
+            "hardened_reason": result.hardened.reason.value,
+            "hardened_result": (result.root / "hardened-control.json")
+            .relative_to(control.run_root)
+            .as_posix(),
+            "manifest": manifest.relative_to(control.run_root).as_posix(),
+            "mode": "single",
+            "primary_reason": result.primary.promotion_reason.value,
+            "primary_result": result.primary.promotion_result.value,
+            "primary_transition": result.bundle.result_path.relative_to(
+                control.run_root
+            ).as_posix(),
+            "scenario": _PATTERN3_SCENARIO_ID,
+        },
     )
 
 
@@ -698,7 +809,7 @@ async def _run_controlled_session_worker(automation_run_id: str, db_path: Path) 
     inference_path = control.path(work.inference_path) if work.inference_path is not None else None
     spec = _worker_session_spec(
         work.scenario,
-        _Condition(work.condition),
+        _condition_for_scenario(work.scenario, work.condition),
         work.session_name,
         trace_path,
         work.fixture_run_id,
@@ -706,12 +817,8 @@ async def _run_controlled_session_worker(automation_run_id: str, db_path: Path) 
         mutation_path,
         inference_path,
     )
-    options_class = (
-        Pattern2ExperimentOptions
-        if work.scenario == _PATTERN2_SCENARIO_ID
-        else CascadeExperimentOptions
-    )
-    options = options_class(
+    options = _session_options_for_scenario(
+        work.scenario,
         profile.model,
         control.run_root,
         work.listen_port,
@@ -746,7 +853,7 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
     db_path: Annotated[Path | None, typer.Option(hidden=True)] = None,
 ) -> None:
     """Run one isolated interactive experiment session."""
-    selected_condition = _Condition(condition)
+    selected_condition = _condition_for_scenario(scenario, condition)
     spec = _worker_session_spec(
         scenario,
         selected_condition,
@@ -757,10 +864,14 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
         mutation_path,
         inference_path,
     )
-    options_class = (
-        Pattern2ExperimentOptions if scenario == _PATTERN2_SCENARIO_ID else CascadeExperimentOptions
+    options = _session_options_for_scenario(
+        scenario,
+        model,
+        trace_path.parent,
+        listen_port,
+        target,
+        db_path,
     )
-    options = options_class(model, trace_path.parent, listen_port, target, db_path)
     profile = _load_target_profile(options)
     options = _resolved_options(options, profile)
     operator = _operator_for(
@@ -776,7 +887,7 @@ def run_cascade_session_worker_cli(  # noqa: PLR0913
 
 def _worker_session_spec(  # noqa: PLR0913
     scenario: str,
-    condition: _Condition,
+    condition: _ExperimentCondition,
     session_name: str,
     trace_path: Path,
     run_id: str,
@@ -785,45 +896,128 @@ def _worker_session_spec(  # noqa: PLR0913
     inference_path: Path | None,
 ) -> _SessionSpec:
     if scenario == _CASCADE_SCENARIO_ID:
-        if session_name not in {"A", "B"}:
-            raise ExperimentError("cascade session name must be A or B")
-        mutation = _mutation_for(condition) if session_name == "A" else None
-        prompt = SESSION_A_PROMPT if session_name == "A" else SESSION_B_PROMPT
-        return _build_session_spec(
-            scenario,
+        return _cascade_worker_spec(
             condition,
             session_name,
-            prompt,
             trace_path,
             run_id,
             reset,
-            mutation,
             mutation_path,
             inference_path,
         )
     if scenario == _PATTERN2_SCENARIO_ID:
-        if session_name != "single":
-            raise ExperimentError("Pattern 2 session name must be single")
-        if not reset:
-            raise ExperimentError("Pattern 2 sessions must reset run-scoped state")
-        return _build_session_spec(
-            scenario,
+        return _pattern2_worker_spec(
             condition,
             session_name,
-            PATTERN2_PROMPT,
             trace_path,
             run_id,
-            True,
-            _pattern2_mutation_for(condition),
+            reset,
+            mutation_path,
+            inference_path,
+        )
+    if scenario == _PATTERN3_SCENARIO_ID:
+        return _pattern3_worker_spec(
+            condition,
+            session_name,
+            trace_path,
+            run_id,
+            reset,
             mutation_path,
             inference_path,
         )
     raise ExperimentError(f"unsupported experiment scenario: {scenario!r}")
 
 
+def _cascade_worker_spec(  # noqa: PLR0913
+    condition: _ExperimentCondition,
+    session_name: str,
+    trace_path: Path,
+    run_id: str,
+    reset: bool,
+    mutation_path: Path | None,
+    inference_path: Path | None,
+) -> _SessionSpec:
+    if not isinstance(condition, _Condition):
+        raise ExperimentError("cascade condition is invalid")
+    if session_name not in {"A", "B"}:
+        raise ExperimentError("cascade session name must be A or B")
+    mutation = _mutation_for(condition) if session_name == "A" else None
+    prompt = SESSION_A_PROMPT if session_name == "A" else SESSION_B_PROMPT
+    return _build_session_spec(
+        _CASCADE_SCENARIO_ID,
+        condition,
+        session_name,
+        prompt,
+        trace_path,
+        run_id,
+        reset,
+        mutation,
+        mutation_path,
+        inference_path,
+    )
+
+
+def _pattern2_worker_spec(  # noqa: PLR0913
+    condition: _ExperimentCondition,
+    session_name: str,
+    trace_path: Path,
+    run_id: str,
+    reset: bool,
+    mutation_path: Path | None,
+    inference_path: Path | None,
+) -> _SessionSpec:
+    if not isinstance(condition, _Condition):
+        raise ExperimentError("Pattern 2 condition is invalid")
+    if session_name != "single":
+        raise ExperimentError("Pattern 2 session name must be single")
+    if not reset:
+        raise ExperimentError("Pattern 2 sessions must reset run-scoped state")
+    return _build_session_spec(
+        _PATTERN2_SCENARIO_ID,
+        condition,
+        session_name,
+        PATTERN2_PROMPT,
+        trace_path,
+        run_id,
+        True,
+        _pattern2_mutation_for(condition),
+        mutation_path,
+        inference_path,
+    )
+
+
+def _pattern3_worker_spec(  # noqa: PLR0913
+    condition: _ExperimentCondition,
+    session_name: str,
+    trace_path: Path,
+    run_id: str,
+    reset: bool,
+    mutation_path: Path | None,
+    inference_path: Path | None,
+) -> _SessionSpec:
+    if not isinstance(condition, Pattern3Condition):
+        raise ExperimentError("Pattern 3 condition is invalid")
+    if session_name != "single" or not reset:
+        raise ExperimentError("Pattern 3 requires one reset single session")
+    if mutation_path is not None:
+        raise ExperimentError("Pattern 3 does not permit proxy mutation")
+    return _build_session_spec(
+        _PATTERN3_SCENARIO_ID,
+        condition,
+        session_name,
+        PATTERN3_PROMPT,
+        trace_path,
+        run_id,
+        True,
+        None,
+        None,
+        inference_path,
+    )
+
+
 def _build_session_spec(  # noqa: PLR0913
     scenario: str,
-    condition: _Condition,
+    condition: _ExperimentCondition,
     session_name: str,
     prompt: str,
     trace_path: Path,
@@ -845,6 +1039,17 @@ def _build_session_spec(  # noqa: PLR0913
         environment = _pattern2_environment_values(run_id)
         server_name = _PATTERN2_MCP_SERVER_NAME
         tool_count = _PATTERN2_TOOL_COUNT
+    elif scenario == _PATTERN3_SCENARIO_ID:
+        if not isinstance(condition, Pattern3Condition):
+            raise ExperimentError("Pattern 3 condition is invalid")
+        fixture_command = _pattern3_fixture_command()
+        environment = _pattern3_environment_values(
+            run_id,
+            condition,
+            trace_path.parent / "authority.json",
+        )
+        server_name = _PATTERN3_MCP_SERVER_NAME
+        tool_count = _PATTERN3_TOOL_COUNT
     else:
         raise ExperimentError(f"unsupported experiment scenario: {scenario!r}")
     return _SessionSpec(
@@ -863,6 +1068,27 @@ def _build_session_spec(  # noqa: PLR0913
         server_name,
         tool_count,
     )
+
+
+def _condition_for_scenario(scenario: str, condition: str) -> _ExperimentCondition:
+    if scenario == _PATTERN3_SCENARIO_ID:
+        return Pattern3Condition(condition)
+    return _Condition(condition)
+
+
+def _session_options_for_scenario(
+    scenario: str,
+    model: str | None,
+    output_root: Path,
+    listen_port: int,
+    target: str | None,
+    db_path: Path | None,
+) -> CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions:
+    if scenario == _PATTERN2_SCENARIO_ID:
+        return Pattern2ExperimentOptions(model, output_root, listen_port, target, db_path)
+    if scenario == _PATTERN3_SCENARIO_ID:
+        return Pattern3ExperimentOptions(model, output_root, listen_port, target, db_path)
+    return CascadeExperimentOptions(model, output_root, listen_port, target, db_path)
 
 
 async def run_cascade_memo(
@@ -1145,6 +1371,295 @@ def _record_pattern2_status(
         completed=completed,
         profile=state.profile,
     )
+
+
+async def run_pattern3_scope(
+    options: Pattern3ExperimentOptions,
+    *,
+    profile: ExperimentTargetProfile,
+    control: ExecutionControl,
+) -> Pattern3ExperimentResult:
+    """Run the governed baseline/opportunity/hardened Pattern 3 series."""
+    state = _prepare_pattern3_run(options, profile, control)
+    results: dict[Pattern3Condition, _Pattern3ConditionResult] = {}
+    _record_pattern3_status(state, "running", results)
+    try:
+        for condition in state.condition_order:
+            control.checkpoint("condition")
+            results[condition] = await _run_pattern3_condition(state, condition)
+            _record_pattern3_status(state, "running", results)
+        control.checkpoint("finalization")
+        completed = _complete_pattern3_series(state, results)
+    except BaseException as exc:
+        _record_pattern3_status(
+            state,
+            _incomplete_status(exc),
+            results,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+    _record_pattern3_status(state, "complete", results, completed=completed)
+    return completed
+
+
+def _prepare_pattern3_run(
+    options: Pattern3ExperimentOptions,
+    profile: ExperimentTargetProfile,
+    control: ExecutionControl,
+) -> _Pattern3RunState:
+    output_root = _validate_options(options, governed=True)
+    selected = _selected_profile(options, profile)
+    if selected is None:
+        raise ExperimentError("Pattern 3 requires one exact governed target")
+    resolved = _resolved_options(options, selected)
+    order = _pattern3_condition_order(control)
+    series_id = control.run_id
+    series_root = output_root / series_id
+    control.checkpoint("output_creation")
+    series_root.mkdir()
+    manifest_path = series_root / "run-manifest.json"
+    _write_json(series_root / _TARGET_PROFILE_NAME, selected.evidence_payload())
+    operator = _operator_for(
+        selected,
+        mcp_server_name=_PATTERN3_MCP_SERVER_NAME,
+        expected_tool_count=_PATTERN3_TOOL_COUNT,
+        control=control,
+    )
+    return _Pattern3RunState(
+        resolved,
+        selected,
+        _pattern3_fixture_command(),
+        Pattern3Scenario(series_id=series_id),
+        order,
+        series_root,
+        manifest_path,
+        operator,
+        control,
+    )
+
+
+def _pattern3_condition_order(
+    control: ExecutionControl,
+) -> tuple[Pattern3Condition, ...]:
+    try:
+        order = tuple(Pattern3Condition(item) for item in control.capability.conditions)
+    except ValueError as exc:
+        raise ExperimentError("installed Pattern 3 condition order is invalid") from exc
+    if order != _DEFAULT_PATTERN3_CONDITION_ORDER:
+        raise ExperimentError("installed Pattern 3 condition order is incomplete")
+    return order
+
+
+async def _run_pattern3_condition(
+    state: _Pattern3RunState,
+    condition: Pattern3Condition,
+) -> _Pattern3ConditionResult:
+    files = _pattern3_condition_files(state.series_root, state.scenario.series_id, condition)
+    files.root.mkdir()
+    authority = _pattern3_workflow_authority(state, files.run_id, condition)
+    _write_json(files.authority, authority.to_payload())
+    spec = _build_session_spec(
+        _PATTERN3_SCENARIO_ID,
+        condition,
+        "single",
+        PATTERN3_PROMPT,
+        files.session,
+        files.run_id,
+        True,
+        None,
+        None,
+        files.inference,
+    )
+    await _capture_session(spec, state.options, state.operator, state.control)
+    _copy_if_present(_pattern3_fixture_artifact_path(files.run_id), files.sink)
+    effect = observe_sink_effect(files.sink, expected_run_id=files.run_id)
+    observation = parse_pattern3_trace(
+        condition,
+        files.session,
+        authority=authority,
+        sink_effect=effect,
+        scenario=state.scenario,
+    )
+    _write_json(files.observation, _pattern3_observation_payload(observation))
+    return _Pattern3ConditionResult(condition, files, observation)
+
+
+def _pattern3_workflow_authority(
+    state: _Pattern3RunState,
+    run_id: str,
+    condition: Pattern3Condition,
+) -> WorkflowAuthority:
+    provenance = state.control.provenance_payload()
+    target = state.control.target_policy(state.profile.target_id)
+    required = ("spec_digest", "policy_digest", "grant_digest")
+    digests = {name: provenance.get(name) for name in required}
+    if any(not isinstance(value, str) for value in digests.values()):
+        raise ExperimentError("governed Pattern 3 authority digests are unavailable")
+    return WorkflowAuthority(
+        series_id=state.scenario.series_id,
+        run_id=run_id,
+        condition=condition,
+        prompt_digest=state.scenario.prompt_digest(),
+        read_fixture_digest=read_fixture_digest(condition, state.scenario),
+        spec_digest=str(digests["spec_digest"]),
+        policy_digest=str(digests["policy_digest"]),
+        grant_digest=str(digests["grant_digest"]),
+        scenario_digest=state.scenario.fingerprint(),
+        target_digest=target.target_fingerprint,
+    )
+
+
+def _complete_pattern3_series(
+    state: _Pattern3RunState,
+    results: dict[Pattern3Condition, _Pattern3ConditionResult],
+) -> Pattern3ExperimentResult:
+    baseline = results[Pattern3Condition.BASELINE].observation
+    opportunity = results[Pattern3Condition.OPPORTUNITY].observation
+    hardened = results[Pattern3Condition.HARDENED_OPPORTUNITY].observation
+    primary = score_scope_expansion(baseline, opportunity, state.scenario)
+    hardened_result = classify_hardened_control(hardened, state.scenario)
+    _write_json(
+        state.series_root / "hardened-control.json",
+        {
+            "passed": hardened_result.passed,
+            "reason": hardened_result.reason.value,
+        },
+    )
+    context = Pattern3ExperimentContext(
+        baseline,
+        opportunity,
+        hardened,
+        _pattern3_pins(state),
+        state.scenario,
+    )
+    provenance = _bundle_provenance(state.control)
+    if provenance is None:
+        raise ExperimentError("Pattern 3 governed provenance is unavailable")
+    bundle = write_pattern3_evidence_bundle(
+        state.series_root / "evidence" / "bundle-v1",
+        result=primary,
+        experiment=context,
+        artifacts=_pattern3_bundle_artifacts(state, results),
+        provenance=provenance,
+    )
+    return Pattern3ExperimentResult(state.series_root, bundle, primary, hardened_result)
+
+
+def _pattern3_pins(state: _Pattern3RunState) -> ExperimentPins:
+    configuration = {
+        "condition_order": ",".join(item.value for item in state.condition_order),
+        "ctpf_version": __version__,
+        "fixture_command": state.fixture_command,
+        "listen_url": f"http://127.0.0.1:{state.options.listen_port}/mcp/",
+        "prompt": PATTERN3_PROMPT,
+        "scenario_fingerprint": state.control.capability.fingerprint,
+        **_profile_pin_configuration(state.profile),
+    }
+    return ExperimentPins(
+        agent=_agent_pin(state.profile),
+        model=_model(state.options),
+        configuration=configuration,
+    )
+
+
+def _pattern3_bundle_artifacts(
+    state: _Pattern3RunState,
+    results: dict[Pattern3Condition, _Pattern3ConditionResult],
+) -> dict[str, Path]:
+    artifacts = {
+        "hardened-control.json": state.series_root / "hardened-control.json",
+        _TARGET_PROFILE_NAME: state.series_root / _TARGET_PROFILE_NAME,
+    }
+    for condition, result in results.items():
+        prefix = condition.value
+        files = result.files
+        artifacts[f"{prefix}/authority.json"] = files.authority
+        artifacts[f"{prefix}/observation.json"] = files.observation
+        artifacts[f"{prefix}/session.json"] = files.session
+        if files.inference.is_file():
+            artifacts[f"{prefix}/session.inference.json"] = files.inference
+        if files.sink.is_file():
+            artifacts[f"{prefix}/sink.json"] = files.sink
+    return artifacts
+
+
+def _record_pattern3_status(
+    state: _Pattern3RunState,
+    status: str,
+    results: dict[Pattern3Condition, _Pattern3ConditionResult],
+    *,
+    error: str | None = None,
+    completed: Pattern3ExperimentResult | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "agent": _agent_pin(state.profile),
+        "condition_order": [item.value for item in state.condition_order],
+        "conditions": {
+            condition.value: _pattern3_condition_manifest(result, state.series_root)
+            for condition, result in results.items()
+        },
+        "listen_url": f"http://127.0.0.1:{state.options.listen_port}/mcp/",
+        "model": _model(state.options),
+        "prompts": {"session": PATTERN3_PROMPT},
+        "scenario": _PATTERN3_SCENARIO_ID,
+        "scenario_fingerprint": state.control.capability.fingerprint,
+        "schema_version": 1,
+        "series_id": state.scenario.series_id,
+        "status": status,
+        "target_profile": state.profile.evidence_payload(),
+    }
+    if error is not None:
+        payload["error"] = error
+    if completed is not None:
+        payload.update(_pattern3_completion_payload(completed, state.series_root))
+    _write_json(state.manifest_path, payload)
+
+
+def _pattern3_completion_payload(
+    completed: Pattern3ExperimentResult,
+    series_root: Path,
+) -> dict[str, Any]:
+    return {
+        "bundle": _relative_path(completed.bundle.root, series_root),
+        "hardened_passed": completed.hardened.passed,
+        "hardened_reason": completed.hardened.reason.value,
+        "hardened_result": "hardened-control.json",
+        "primary_reason": completed.primary.promotion_reason.value,
+        "primary_result": completed.primary.promotion_result.value,
+        "primary_transition": _relative_path(completed.bundle.result_path, series_root),
+    }
+
+
+def _pattern3_condition_manifest(
+    result: _Pattern3ConditionResult,
+    series_root: Path,
+) -> dict[str, Any]:
+    files = result.files
+    return {
+        "authority": _relative_path(files.authority, series_root),
+        "inference": _relative_path(files.inference, series_root),
+        "observation": _pattern3_observation_payload(result.observation),
+        "observation_path": _relative_path(files.observation, series_root),
+        "run_id": files.run_id,
+        "session": _relative_path(files.session, series_root),
+        "sink": _relative_path(files.sink, series_root) if files.sink.is_file() else None,
+    }
+
+
+def _pattern3_observation_payload(observation: Pattern3Observation) -> dict[str, Any]:
+    return {
+        "authority_digest": observation.authority.digest(),
+        "condition": observation.condition.value,
+        "evidence_complete": observation.evidence_complete,
+        "evidence_notes": list(observation.evidence_notes),
+        "external_effect": {
+            "present": observation.external_effect.present,
+            "reason": observation.external_effect.reason,
+        },
+        "read_fixture_digest": observation.read_fixture_digest,
+        "tool_arguments": observation.tool_arguments,
+        "tool_invocation": observation.tool_invocation,
+    }
 
 
 async def run_cascade_matrix(
@@ -1469,7 +1984,7 @@ async def _capture_condition_sessions(
 
 async def _capture_session(
     spec: _SessionSpec,
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
     operator: _Operator,
     control: ExecutionControl | None = None,
 ) -> None:
@@ -1487,7 +2002,7 @@ async def _capture_session(
 
 def _run_console_session_process(
     spec: _SessionSpec,
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
 ) -> None:
     # Command arguments come only from validated internal session state.
     command = _session_worker_command(spec, options)
@@ -1501,7 +2016,7 @@ def _run_console_session_process(
 
 async def _run_controlled_session_process(
     spec: _SessionSpec,
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
     control: ExecutionControl,
 ) -> None:
     target_id = options.target
@@ -1574,7 +2089,7 @@ async def _stop_owned_process(process: asyncio.subprocess.Process | None) -> Non
 
 def _session_worker_command(
     spec: _SessionSpec,
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -1612,7 +2127,7 @@ def _session_worker_command(
 
 async def _run_session(
     spec: _SessionSpec,
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
     operator: _Operator,
     *,
     control: ExecutionControl | None = None,
@@ -1956,6 +2471,7 @@ def _bundle_provenance(control: ExecutionControl | None) -> dict[str, Any] | Non
         return None
     payload = control.provenance_payload()
     return {
+        "grant_digest": payload["grant_digest"],
         "grant_id": payload["grant_id"],
         "policy_digest": payload["policy_digest"],
         "run_id": payload["run_id"],
@@ -2330,6 +2846,24 @@ def _pattern2_condition_files(
     )
 
 
+def _pattern3_condition_files(
+    series_root: Path,
+    series_id: str,
+    condition: Pattern3Condition,
+) -> _Pattern3ConditionFiles:
+    root = series_root / condition.value
+    run_id = f"{series_id}-{condition.value}"
+    return _Pattern3ConditionFiles(
+        run_id,
+        root,
+        root / "authority.json",
+        root / "session.json",
+        root / "session.inference.json",
+        root / "sink.json",
+        root / "observation.json",
+    )
+
+
 def _fixture_work_dir() -> Path:
     """Return the cascade fixture work directory.
 
@@ -2359,6 +2893,17 @@ def _pattern2_fixture_artifact_path(run_id: str) -> Path:
     return _pattern2_fixture_work_dir() / f"sink-{run_id}.json"
 
 
+def _pattern3_fixture_work_dir() -> Path:
+    return (
+        Path(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")))  # noqa: S108  # nosec B108
+        / _PATTERN3_FIXTURE_WORK_DIRNAME
+    )
+
+
+def _pattern3_fixture_artifact_path(run_id: str) -> Path:
+    return _pattern3_fixture_work_dir() / f"effect-{run_id}.json"
+
+
 def _copy_if_present(source: Path, destination: Path) -> None:
     if source.is_file():
         shutil.copy2(source, destination)
@@ -2386,6 +2931,19 @@ def _pattern2_environment_values(run_id: str) -> dict[str, str]:
     }
 
 
+def _pattern3_environment_values(
+    run_id: str,
+    condition: Pattern3Condition,
+    authority_path: Path,
+) -> dict[str, str]:
+    return {
+        "CTPF_PATTERN3_AUTHORITY_PATH": str(authority_path),
+        "CTPF_PATTERN3_CONDITION": condition.value,
+        "CTPF_PATTERN3_RESET_SINK": "1",
+        "CTPF_PATTERN3_RUN_ID": run_id,
+    }
+
+
 @contextmanager
 def _temporary_environment(values: dict[str, str]) -> Iterator[None]:
     previous = {key: os.environ.get(key) for key in values}
@@ -2401,7 +2959,7 @@ def _temporary_environment(values: dict[str, str]) -> Iterator[None]:
 
 
 def _validate_options(
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
     *,
     governed: bool = False,
 ) -> Path:
@@ -2452,7 +3010,7 @@ def _validated_condition_order(
 
 
 def _load_target_profile(
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
 ) -> ExperimentTargetProfile | None:
     if not options.target or not options.target.strip():
         return None
@@ -2463,7 +3021,7 @@ def _load_target_profile(
 
 
 def _selected_profile(
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
     supplied: ExperimentTargetProfile | None,
 ) -> ExperimentTargetProfile | None:
     if supplied is None:
@@ -2487,16 +3045,25 @@ def _resolved_options(
 ) -> Pattern2ExperimentOptions: ...
 
 
+@overload
 def _resolved_options(
-    options: CascadeExperimentOptions | Pattern2ExperimentOptions,
+    options: Pattern3ExperimentOptions,
     profile: ExperimentTargetProfile | None,
-) -> CascadeExperimentOptions | Pattern2ExperimentOptions:
+) -> Pattern3ExperimentOptions: ...
+
+
+def _resolved_options(
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
+    profile: ExperimentTargetProfile | None,
+) -> CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions:
     if profile is None:
         return options
     return replace(options, model=profile.model)
 
 
-def _model(options: CascadeExperimentOptions | Pattern2ExperimentOptions) -> str:
+def _model(
+    options: CascadeExperimentOptions | Pattern2ExperimentOptions | Pattern3ExperimentOptions,
+) -> str:
     if not isinstance(options.model, str) or not options.model.strip():
         raise ExperimentError("experiment model is unresolved")
     return options.model.strip()
@@ -2512,6 +3079,10 @@ def _fixture_command() -> str:
 
 def _pattern2_fixture_command() -> str:
     return f'"{sys.executable}" -m ctpf.kernel.pattern2_fixture'
+
+
+def _pattern3_fixture_command() -> str:
+    return f'"{sys.executable}" -m ctpf.kernel.pattern3_scope_fixture'
 
 
 def _new_series_id() -> str:

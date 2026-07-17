@@ -15,7 +15,7 @@ from ctpf.automation.approval import (
     authenticate_authorization_grant,
     authenticate_policy,
 )
-from ctpf.automation.canonical import CanonicalizationError, load_canonical_object
+from ctpf.automation.canonical import CanonicalizationError, load_canonical_object, sha256_digest
 from ctpf.automation.contracts import (
     AuthorizationGrant,
     AutomationRunState,
@@ -45,6 +45,7 @@ CONTROL_POLL_SECONDS = 0.25
 PROCESS_TERMINATE_GRACE_SECONDS = 5.0
 _T = TypeVar("_T")
 _RUNNING_STATES = {AutomationRunState.RUNNING, AutomationRunState.CANCEL_REQUESTED}
+_SINGLE_SESSION_SCENARIOS = {"pattern2", "pattern3-scope"}
 _SESSION_FIELDS = {
     "condition",
     "fixture_run_id",
@@ -352,12 +353,22 @@ class ExecutionControl:
         """Return bounded lifecycle provenance for governed experiment export."""
         with get_readonly_connection(self.db_path) as conn:
             run = get_automation_run(conn, self.run_id)
+            if run is None:
+                raise ExecutionInterruptedError("automation run disappeared")
             events = list_events(conn, self.run_id)
-        if run is None:
-            raise ExecutionInterruptedError("automation run disappeared")
+            stored_grant = get_grant(conn, run.grant_id)
+        if stored_grant is None:
+            raise ExecutionInterruptedError("automation grant disappeared")
+        try:
+            grant_payload = load_canonical_object(stored_grant.grant_json)
+        except CanonicalizationError as exc:
+            raise ExecutionInterruptedError("automation grant payload is malformed") from exc
+        if not isinstance(grant_payload, dict):
+            raise ExecutionInterruptedError("automation grant payload is malformed")
         return {
             "budget": _stored_object(run.budget_json, "budget"),
             "events": events,
+            "grant_digest": sha256_digest(grant_payload),
             "grant_id": run.grant_id,
             "policy_digest": run.policy_digest,
             "run_id": run.run_id,
@@ -492,7 +503,7 @@ def _validate_session_work(control: ExecutionControl, work: SessionWork) -> None
     control.target_policy(work.target_id)
     if work.condition not in control.capability.conditions:
         raise ExecutionInterruptedError("session condition is not installed")
-    expected_names = {"single"} if work.scenario == "pattern2" else {"A", "B"}
+    expected_names = {"single"} if work.scenario in _SINGLE_SESSION_SCENARIOS else {"A", "B"}
     if work.session_name not in expected_names:
         raise ExecutionInterruptedError("session name is not installed")
     if work.listen_port != control.policy.limits.loopback_port:
@@ -510,8 +521,12 @@ def _validate_session_work(control: ExecutionControl, work: SessionWork) -> None
 
 def _expected_session_fields(work: SessionWork) -> tuple[str, str, str | None, bool]:
     prefix = work.condition
-    mutation = f"{prefix}/mutation.json" if work.condition != "baseline" else None
-    if work.scenario == "pattern2":
+    if work.scenario in _SINGLE_SESSION_SCENARIOS:
+        mutation = (
+            f"{prefix}/mutation.json"
+            if work.scenario == "pattern2" and work.condition != "baseline"
+            else None
+        )
         return (
             f"{prefix}/session.json",
             f"{prefix}/session.inference.json",

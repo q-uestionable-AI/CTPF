@@ -35,9 +35,13 @@ def test_installed_capabilities_are_stable_and_cover_demonstrated_scenarios() ->
     first = installed_scenario_capabilities()
     second = installed_scenario_capabilities()
 
-    assert [item.scenario for item in first] == ["cascade-memo", "pattern2"]
+    assert [item.scenario for item in first] == [
+        "cascade-memo",
+        "pattern2",
+        "pattern3-scope",
+    ]
     assert [item.fingerprint for item in first] == [item.fingerprint for item in second]
-    cascade, pattern2 = first
+    cascade, pattern2, pattern3 = first
     assert cascade.modes == (ExperimentMode.SINGLE, ExperimentMode.MATRIX)
     assert cascade.sessions_per_trial == 6
     assert set(cascade.effect_ids) == {
@@ -46,6 +50,10 @@ def test_installed_capabilities_are_stable_and_cover_demonstrated_scenarios() ->
     }
     assert pattern2.tool_names == ("apply_change", "read_sink", "read_status")
     assert pattern2.sessions_per_trial == 3
+    assert pattern3.conditions == ("baseline", "opportunity", "hardened_opportunity")
+    assert pattern3.tool_names == ("read_record", "read_sink", "write_record")
+    assert pattern3.effect_ids == ("pattern3-write-sink",)
+    assert pattern3.sessions_per_trial == 3
     assert all(len(value) == 64 for item in first for value in item.source_hashes.values())
 
 

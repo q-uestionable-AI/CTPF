@@ -61,6 +61,33 @@ def _read_configuration() -> tuple[str, Pattern3Condition]:
         raise SystemExit(2) from exc
 
 
+def _load_workflow_authority(
+    run_id: str,
+    condition: Pattern3Condition,
+) -> WorkflowAuthority:
+    path_value = os.environ.get("CTPF_PATTERN3_AUTHORITY_PATH", "").strip()
+    if not path_value:
+        return preflight_workflow_authority(run_id, condition)
+    try:
+        raw = Path(path_value).read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        sys.stderr.write("CTPF_PATTERN3_AUTHORITY_PATH must contain readable authority JSON.\n")
+        raise SystemExit(2) from exc
+    if not isinstance(payload, dict):
+        sys.stderr.write("CTPF_PATTERN3_AUTHORITY_PATH must contain a JSON object.\n")
+        raise SystemExit(2)
+    try:
+        authority = WorkflowAuthority.from_payload(payload)
+    except ValueError as exc:
+        sys.stderr.write("CTPF_PATTERN3_AUTHORITY_PATH contains invalid authority.\n")
+        raise SystemExit(2) from exc
+    if authority.run_id != run_id or authority.condition != condition:
+        sys.stderr.write("Pattern 3 authority does not match the active run and condition.\n")
+        raise SystemExit(2)
+    return authority
+
+
 def sink_dir() -> Path:
     """Return the directory used for Pattern 3 preflight effects."""
     root = os.environ.get("TEMP", os.environ.get("TMP", "/tmp"))  # noqa: S108  # nosec B108
@@ -171,7 +198,7 @@ def _maybe_reset_on_start() -> None:
 
 
 ACTIVE_RUN_ID, ACTIVE_CONDITION = _read_configuration()
-_AUTHORITY = preflight_workflow_authority(ACTIVE_RUN_ID, ACTIVE_CONDITION)
+_AUTHORITY = _load_workflow_authority(ACTIVE_RUN_ID, ACTIVE_CONDITION)
 _ARMED_GRANTS: list[_ArmedGrant] = []
 _maybe_reset_on_start()
 

@@ -11,7 +11,15 @@ from typing import Any
 
 import pytest
 
-from ctpf.kernel.pattern3_scope import APPROVED_VALUE, READ_TOOL, RECORD_ID, SINK_TOOL, WRITE_TOOL
+from ctpf.kernel.pattern3_scope import (
+    APPROVED_VALUE,
+    READ_TOOL,
+    RECORD_ID,
+    SINK_TOOL,
+    WRITE_TOOL,
+    Pattern3Condition,
+    preflight_workflow_authority,
+)
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2] / "src" / "ctpf" / "kernel" / "pattern3_scope_fixture.py"
@@ -25,11 +33,13 @@ def _load_fixture(
     run_id: str | None,
     condition: str | None,
     reset: bool = False,
+    authority_path: Path | None = None,
 ) -> Any:
     for key in (
         "CTPF_PATTERN3_RUN_ID",
         "CTPF_PATTERN3_CONDITION",
         "CTPF_PATTERN3_RESET_SINK",
+        "CTPF_PATTERN3_AUTHORITY_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
     if run_id is not None:
@@ -38,6 +48,8 @@ def _load_fixture(
         monkeypatch.setenv("CTPF_PATTERN3_CONDITION", condition)
     if reset:
         monkeypatch.setenv("CTPF_PATTERN3_RESET_SINK", "1")
+    if authority_path is not None:
+        monkeypatch.setenv("CTPF_PATTERN3_AUTHORITY_PATH", str(authority_path))
     suffix = f"{run_id or 'missing'}_{condition or 'missing'}".replace("-", "_")
     name = f"pattern3_scope_fixture_under_test_{suffix}"
     spec = importlib.util.spec_from_file_location(name, _FIXTURE_PATH)
@@ -83,6 +95,34 @@ def test_all_conditions_expose_identical_agent_visible_tool_schemas(
     assert schemas[0] == schemas[1] == schemas[2]
     assert all("arm_write_for_control" not in schema for schema in schemas)
     assert all("reset_active_sink" not in schema for schema in schemas)
+
+
+def test_governed_authority_file_is_loaded_and_bound_to_condition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    authority = preflight_workflow_authority(
+        "governed-run",
+        Pattern3Condition.OPPORTUNITY,
+    )
+    path = tmp_path / "authority.json"
+    path.write_text(json.dumps(authority.to_payload()), encoding="utf-8")
+
+    module = _load_fixture(
+        monkeypatch,
+        run_id="governed-run",
+        condition="opportunity",
+        authority_path=path,
+    )
+    assert module.active_workflow_authority() == authority
+    with pytest.raises(SystemExit):
+        _load_fixture(
+            monkeypatch,
+            run_id="different-run",
+            condition="opportunity",
+            authority_path=path,
+        )
 
 
 def test_read_records_share_schema_and_controlled_content(

@@ -8,17 +8,27 @@ It does not register an autonomous scenario or invoke a model.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+import shutil
+from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ctpf.automation.canonical import sha256_digest
 from ctpf.kernel.slice import (
+    ARTIFACTS_DIRNAME,
+    BUNDLE_SCHEMA_CURRENT,
+    MANIFEST_NAME,
+    RESULT_NAME,
+    EvidenceBundle,
+    ExperimentPins,
     ExternalEffect,
     PromotionReason,
     PromotionResult,
     TrustTransition,
+    sha256_file,
 )
 
 SCHEMA_VERSION = 1
@@ -250,6 +260,17 @@ class Pattern3Observation:
 
 
 @dataclass(frozen=True)
+class Pattern3ExperimentContext:
+    """Pinned Pattern 3 observations and execution identity."""
+
+    baseline: Pattern3Observation
+    opportunity: Pattern3Observation
+    hardened: Pattern3Observation
+    pins: ExperimentPins
+    scenario: Pattern3Scenario
+
+
+@dataclass(frozen=True)
 class HardenedControlResult:
     """Mechanical disposition of one hardened opportunity observation."""
 
@@ -377,6 +398,243 @@ def classify_hardened_control(
     }
     fallback = HardenedControlReason.CONTROL_FAILURE
     return HardenedControlResult(reason in mapping, mapping.get(reason, fallback))
+
+
+def write_pattern3_evidence_bundle(
+    output_dir: Path,
+    *,
+    result: TrustTransition,
+    experiment: Pattern3ExperimentContext,
+    artifacts: dict[str, Path],
+    provenance: dict[str, Any],
+) -> EvidenceBundle:
+    """Write a verifier-compatible Pattern 3 evidence bundle."""
+    _validate_pattern3_bundle(result, experiment, artifacts, provenance)
+    prepared = _prepare_pattern3_artifacts(artifacts)
+    artifact_refs = {source.resolve(): f"{ARTIFACTS_DIRNAME}/{name}" for name, source in prepared}
+    output_dir.mkdir(parents=True)
+    artifacts_dir = output_dir / ARTIFACTS_DIRNAME
+    artifacts_dir.mkdir()
+    hashes = _copy_pattern3_artifacts(prepared, artifacts_dir)
+    result_path = output_dir / RESULT_NAME
+    result_path.write_text(
+        json.dumps(
+            _pattern3_transition_payload(result, experiment.opportunity, artifact_refs),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes[RESULT_NAME] = sha256_file(result_path)
+    manifest_path = output_dir / MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(
+            _pattern3_manifest(result, experiment, hashes, artifact_refs, provenance),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return EvidenceBundle(output_dir, manifest_path, result_path, hashes)
+
+
+def _validate_pattern3_bundle(
+    result: TrustTransition,
+    experiment: Pattern3ExperimentContext,
+    artifacts: dict[str, Path],
+    provenance: dict[str, Any],
+) -> None:
+    observations = (
+        experiment.baseline,
+        experiment.opportunity,
+        experiment.hardened,
+    )
+    expected_conditions = tuple(Pattern3Condition)
+    if tuple(item.condition for item in observations) != expected_conditions:
+        raise ValueError("Pattern 3 bundle conditions are incomplete or out of order")
+    expected = score_scope_expansion(
+        experiment.baseline,
+        experiment.opportunity,
+        experiment.scenario,
+    )
+    if result != expected:
+        raise ValueError("Pattern 3 transition does not match its observations")
+    if not isinstance(provenance, dict):
+        raise TypeError("Pattern 3 governed provenance must be a JSON object")
+    required = {
+        f"{condition.value}/{name}"
+        for condition in expected_conditions
+        for name in ("authority.json", "observation.json", "session.json")
+    }
+    if not required.issubset(artifacts):
+        raise ValueError("Pattern 3 bundle is missing required condition artifacts")
+    for observation in observations:
+        _validate_pattern3_governed_authority(
+            observation,
+            experiment.scenario,
+            artifacts,
+            provenance,
+        )
+    if (
+        result.promotion_result == PromotionResult.CONFIRMED
+        and "opportunity/sink.json" not in artifacts
+    ):
+        raise ValueError("confirmed Pattern 3 result requires the opportunity sink")
+
+
+def _validate_pattern3_governed_authority(
+    observation: Pattern3Observation,
+    scenario: Pattern3Scenario,
+    artifacts: dict[str, Path],
+    provenance: dict[str, Any],
+) -> None:
+    authority = observation.authority
+    expected = {
+        "grant_digest": authority.grant_digest,
+        "policy_digest": authority.policy_digest,
+        "spec_digest": authority.spec_digest,
+    }
+    if any(provenance.get(name) != digest for name, digest in expected.items()):
+        raise ValueError("Pattern 3 authority differs from governed provenance")
+    targets = provenance.get("target_fingerprints")
+    target_values = set(targets.values()) if isinstance(targets, dict) else set()
+    if (
+        authority.series_id != provenance.get("run_id")
+        or authority.target_digest not in target_values
+        or authority.scenario_digest != scenario.fingerprint()
+    ):
+        raise ValueError("Pattern 3 authority is not bound to the governed run")
+    path = artifacts[f"{observation.condition.value}/authority.json"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        stored = WorkflowAuthority.from_payload(payload) if isinstance(payload, dict) else None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("Pattern 3 authority artifact is invalid") from exc
+    if stored != authority:
+        raise ValueError("Pattern 3 authority artifact differs from the observation")
+
+
+def _prepare_pattern3_artifacts(artifacts: dict[str, Path]) -> list[tuple[str, Path]]:
+    prepared: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for name, source in artifacts.items():
+        if not name.strip() or "\\" in name:
+            raise ValueError(f"unsafe evidence artifact path: {name!r}")
+        logical = PurePosixPath(name)
+        if (
+            logical.is_absolute()
+            or Path(name).is_absolute()
+            or any(part in {"", ".", ".."} or ":" in part for part in logical.parts)
+        ):
+            raise ValueError(f"unsafe evidence artifact path: {name!r}")
+        normalized = logical.as_posix()
+        if normalized.casefold() in seen or not source.is_file():
+            raise ValueError(f"invalid Pattern 3 evidence artifact: {normalized}")
+        seen.add(normalized.casefold())
+        prepared.append((normalized, source))
+    return prepared
+
+
+def _copy_pattern3_artifacts(
+    prepared: list[tuple[str, Path]],
+    artifacts_dir: Path,
+) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for name, source in prepared:
+        destination = artifacts_dir.joinpath(*PurePosixPath(name).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        hashes[f"{ARTIFACTS_DIRNAME}/{name}"] = sha256_file(destination)
+    return hashes
+
+
+def _pattern3_transition_payload(
+    result: TrustTransition,
+    opportunity: Pattern3Observation,
+    artifact_refs: dict[Path, str],
+) -> dict[str, Any]:
+    payload = asdict(result)
+    payload["promotion_result"] = result.promotion_result.value
+    payload["promotion_reason"] = result.promotion_reason.value
+    external_effect = payload.get("external_effect")
+    if isinstance(external_effect, dict) and "sink_path" in external_effect:
+        external_effect["sink_path"] = _pattern3_artifact_ref(
+            opportunity.external_effect.sink_path,
+            artifact_refs,
+        )
+    return payload
+
+
+def _pattern3_manifest(
+    result: TrustTransition,
+    experiment: Pattern3ExperimentContext,
+    hashes: dict[str, str],
+    artifact_refs: dict[Path, str],
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    observations = (
+        experiment.baseline,
+        experiment.opportunity,
+        experiment.hardened,
+    )
+    return {
+        "artifact_hashes": hashes,
+        "conditions": {
+            item.condition.value: _pattern3_observation_payload(item, artifact_refs)
+            for item in observations
+        },
+        "pins": asdict(experiment.pins),
+        "promotion_reason": result.promotion_reason.value,
+        "promotion_result": result.promotion_result.value,
+        "provenance": provenance,
+        "scenario": {
+            **experiment.scenario.to_payload(),
+            "fingerprint": experiment.scenario.fingerprint(),
+            "fixture_module": "ctpf.kernel.pattern3_scope_fixture",
+        },
+        "schema_version": BUNDLE_SCHEMA_CURRENT,
+    }
+
+
+def _pattern3_observation_payload(
+    observation: Pattern3Observation,
+    artifact_refs: dict[Path, str],
+) -> dict[str, Any]:
+    effect = observation.external_effect
+    effect_payload = dict(effect.payload) if effect.payload is not None else None
+    if effect_payload is not None and "sink_path" in effect_payload:
+        effect_payload["sink_path"] = _pattern3_artifact_ref(effect.sink_path, artifact_refs)
+    return {
+        "authority": observation.authority.to_payload(),
+        "authority_artifact": (f"{ARTIFACTS_DIRNAME}/{observation.condition.value}/authority.json"),
+        "authority_digest": observation.authority.digest(),
+        "condition": observation.condition.value,
+        "evidence_complete": observation.evidence_complete,
+        "evidence_notes": list(observation.evidence_notes),
+        "external_effect": {
+            "payload": effect_payload,
+            "present": effect.present,
+            "reason": effect.reason,
+            "sink_path": _pattern3_artifact_ref(effect.sink_path, artifact_refs),
+        },
+        "read_fixture_digest": observation.read_fixture_digest,
+        "tool_arguments": observation.tool_arguments,
+        "tool_invocation": observation.tool_invocation,
+    }
+
+
+def _pattern3_artifact_ref(
+    path: Path | None,
+    artifact_refs: dict[Path, str],
+) -> str | None:
+    if path is None:
+        return None
+    try:
+        return artifact_refs.get(path.resolve())
+    except OSError:
+        return None
 
 
 def _string(payload: dict[str, Any], key: str) -> str:

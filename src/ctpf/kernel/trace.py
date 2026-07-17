@@ -7,6 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ctpf.kernel.pattern3_scope import (
+    HardenedControlReason,
+    Pattern3Condition,
+    Pattern3Observation,
+    Pattern3Scenario,
+    WorkflowAuthority,
+    read_fixture_digest,
+    read_fixture_payload,
+)
 from ctpf.kernel.slice import (
     CascadeArmObservation,
     CascadeMemoScenario,
@@ -83,6 +92,57 @@ def parse_pattern2_trace(
         tool_invocation=action.name if action else None,
         tool_arguments=action.arguments if action else None,
         external_effect=sink_effect,
+        evidence_complete=not notes,
+        evidence_notes=tuple(notes),
+    )
+
+
+def parse_pattern3_trace(
+    condition: Pattern3Condition,
+    trace_path: Path,
+    *,
+    authority: WorkflowAuthority,
+    sink_effect: ExternalEffect,
+    scenario: Pattern3Scenario,
+) -> Pattern3Observation:
+    """Build one Pattern 3 observation from a completed proxy trace."""
+    trace = _load_trace(trace_path, "session")
+    notes = list(trace.notes)
+    calls = _tool_calls(trace.records, "session", notes)
+    read_call = _select_call(
+        calls,
+        scenario.read_tool,
+        "session_read_record",
+        True,
+        notes,
+    )
+    read_content = _read_result_content(
+        trace.records,
+        read_call,
+        "session_read_record",
+        notes,
+    )
+    _require_expected_json(
+        read_content,
+        read_fixture_payload(condition, scenario),
+        "session_read_record_response",
+        notes,
+    )
+    write_call = _select_call(
+        calls,
+        scenario.write_tool,
+        "session_write_record",
+        False,
+        notes,
+    )
+    effect = _pattern3_effect(trace.records, write_call, sink_effect, notes)
+    return Pattern3Observation(
+        condition=condition,
+        authority=authority,
+        read_fixture_digest=read_fixture_digest(condition, scenario),
+        tool_invocation=write_call.name if write_call else None,
+        tool_arguments=write_call.arguments if write_call else None,
+        external_effect=effect,
         evidence_complete=not notes,
         evidence_notes=tuple(notes),
     )
@@ -310,6 +370,78 @@ def _require_json_object(
         return
     if not isinstance(parsed, dict):
         _add_note(notes, f"{note_prefix}_invalid_shape")
+
+
+def _require_expected_json(
+    raw: str | None,
+    expected: dict[str, object],
+    note_prefix: str,
+    notes: list[str],
+) -> None:
+    if raw is None or not raw.strip():
+        return
+    try:
+        parsed: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        _add_note(notes, f"{note_prefix}_invalid_json")
+        return
+    if not isinstance(parsed, dict):
+        _add_note(notes, f"{note_prefix}_invalid_shape")
+    elif parsed != expected:
+        _add_note(notes, f"{note_prefix}_mismatch")
+
+
+def _pattern3_effect(
+    records: tuple[_TraceRecord, ...],
+    write_call: _ToolCall | None,
+    sink_effect: ExternalEffect,
+    notes: list[str],
+) -> ExternalEffect:
+    if write_call is None or sink_effect.present:
+        return sink_effect
+    reason = _pattern3_write_error_reason(records, write_call, notes)
+    if reason is None:
+        return sink_effect
+    return ExternalEffect(False, sink_effect.payload, sink_effect.sink_path, reason)
+
+
+def _pattern3_write_error_reason(
+    records: tuple[_TraceRecord, ...],
+    write_call: _ToolCall,
+    notes: list[str],
+) -> str | None:
+    responses = [
+        record
+        for record in records
+        if record.direction == _SERVER_TO_CLIENT and record.correlated_id == write_call.proxy_id
+    ]
+    if len(responses) != 1 or responses[0].payload.get("id") != write_call.jsonrpc_id:
+        _add_note(notes, "session_write_record_response_missing_or_ambiguous")
+        return None
+    result = responses[0].payload.get("result")
+    if not isinstance(result, dict) or result.get("isError") is not True:
+        return None
+    content = result.get("content")
+    texts = (
+        [
+            item.get("text")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ]
+        if isinstance(content, list)
+        else []
+    )
+    combined = "\n".join(item for item in texts if isinstance(item, str))
+    allowed = {
+        HardenedControlReason.BLOCKED_GRANT_MISSING.value.removeprefix("blocked_"),
+        HardenedControlReason.BLOCKED_GRANT_INVALID.value.removeprefix("blocked_"),
+        HardenedControlReason.BLOCKED_GRANT_MISMATCH.value.removeprefix("blocked_"),
+        HardenedControlReason.BLOCKED_GRANT_REPLAYED.value.removeprefix("blocked_"),
+    }
+    reason = next((item for item in allowed if item in combined), None)
+    if reason is None:
+        _add_note(notes, "session_write_record_error_unclassified")
+    return reason
 
 
 def _validate_expected_mutation(

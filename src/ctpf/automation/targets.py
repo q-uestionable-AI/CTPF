@@ -163,9 +163,10 @@ class TargetIdentity:
 
 
 def installed_scenario_capabilities() -> tuple[ScenarioCapability, ...]:
-    """Return the two installed packaged experiment capability records."""
+    """Return the installed packaged experiment capability records."""
     from ctpf import experiment, kernel
     from ctpf.kernel import slice as kernel_slice
+    from ctpf.kernel import trace as kernel_trace
 
     kernel_path = Path(kernel.__file__).parent
     shared_hash = _file_hash(Path(kernel_slice.__file__))
@@ -173,6 +174,7 @@ def installed_scenario_capabilities() -> tuple[ScenarioCapability, ...]:
     cascade = _build_capability(
         scenario="cascade-memo",
         modes=(ExperimentMode.SINGLE, ExperimentMode.MATRIX),
+        conditions=("baseline", "manipulated", "hardened"),
         sessions=6,
         prompts=(experiment.SESSION_A_PROMPT, experiment.SESSION_B_PROMPT),
         tools=(
@@ -193,6 +195,7 @@ def installed_scenario_capabilities() -> tuple[ScenarioCapability, ...]:
     pattern2 = _build_capability(
         scenario="pattern2",
         modes=(ExperimentMode.SINGLE,),
+        conditions=("baseline", "manipulated", "hardened"),
         sessions=3,
         prompts=(experiment.PATTERN2_PROMPT,),
         tools=("apply_change", "read_sink", "read_status"),
@@ -203,7 +206,22 @@ def installed_scenario_capabilities() -> tuple[ScenarioCapability, ...]:
             "kernel/slice.py": shared_hash,
         },
     )
-    return (cascade, pattern2)
+    pattern3 = _build_capability(
+        scenario="pattern3-scope",
+        modes=(ExperimentMode.SINGLE,),
+        conditions=("baseline", "opportunity", "hardened_opportunity"),
+        sessions=3,
+        prompts=(experiment.PATTERN3_PROMPT,),
+        tools=("read_record", "read_sink", "write_record"),
+        effects=("pattern3-write-sink",),
+        source_hashes={
+            "experiment.py": experiment_hash,
+            "pattern3_scope.py": _file_hash(kernel_path / "pattern3_scope.py"),
+            "pattern3_scope_fixture.py": _file_hash(kernel_path / "pattern3_scope_fixture.py"),
+            "kernel/trace.py": _file_hash(Path(kernel_trace.__file__)),
+        },
+    )
+    return (cascade, pattern2, pattern3)
 
 
 def scenario_capability(scenario: str) -> ScenarioCapability:
@@ -385,6 +403,7 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
     *,
     scenario: str,
     modes: tuple[ExperimentMode, ...],
+    conditions: tuple[str, ...],
     sessions: int,
     prompts: tuple[str, ...],
     tools: tuple[str, ...],
@@ -392,7 +411,7 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
     source_hashes: dict[str, str],
 ) -> ScenarioCapability:
     payload: dict[str, Any] = {
-        "conditions": ["baseline", "manipulated", "hardened"],
+        "conditions": list(conditions),
         "contract_version": 2,
         "effect_ids": list(effects),
         "modes": [mode.value for mode in modes],
@@ -409,7 +428,7 @@ def _build_capability(  # noqa: PLR0913 - explicit immutable capability fields
         scenario=scenario,
         contract_version=2,
         modes=modes,
-        conditions=("baseline", "manipulated", "hardened"),
+        conditions=conditions,
         sessions_per_trial=sessions,
         prompts=prompts,
         tool_names=tools,
