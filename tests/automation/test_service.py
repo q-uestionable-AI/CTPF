@@ -443,3 +443,34 @@ def test_session_work_rejects_path_traversal() -> None:
     }
     with pytest.raises(execution_control.ExecutionInterruptedError, match="traversal"):
         execution_control.SessionWork.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_mutation"),
+    [("baseline", None), ("manipulated", "manipulated/mutation.json")],
+)
+def test_cascade_session_a_retains_condition_mutation(
+    condition: str,
+    expected_mutation: str | None,
+) -> None:
+    """Cascade Session A keeps its governed mutation artifact contract."""
+    work = execution_control.SessionWork(
+        work_id="c" * 32,
+        scenario="cascade-memo",
+        condition=condition,
+        session_name="A",
+        target_id=TARGET_ID,
+        fixture_run_id=f"run-{condition}",
+        trace_path=f"{condition}/session-A.json",
+        inference_path=f"{condition}/session-A.inference.json",
+        mutation_path=expected_mutation,
+        reset=True,
+        listen_port=8765,
+    )
+
+    assert execution_control._expected_session_fields(work) == (
+        f"{condition}/session-A.json",
+        f"{condition}/session-A.inference.json",
+        expected_mutation,
+        True,
+    )

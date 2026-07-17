@@ -216,6 +216,7 @@ def installed_scenario_capabilities() -> tuple[ScenarioCapability, ...]:
         effects=("pattern3-write-sink",),
         source_hashes={
             "experiment.py": experiment_hash,
+            "kernel/slice.py": shared_hash,
             "pattern3_scope.py": _file_hash(kernel_path / "pattern3_scope.py"),
             "pattern3_scope_fixture.py": _file_hash(kernel_path / "pattern3_scope_fixture.py"),
             "kernel/trace.py": _file_hash(Path(kernel_trace.__file__)),

@@ -54,6 +54,7 @@ def test_installed_capabilities_are_stable_and_cover_demonstrated_scenarios() ->
     assert pattern3.tool_names == ("read_record", "read_sink", "write_record")
     assert pattern3.effect_ids == ("pattern3-write-sink",)
     assert pattern3.sessions_per_trial == 3
+    assert "kernel/slice.py" in pattern3.source_hashes
     assert all(len(value) == 64 for item in first for value in item.source_hashes.values())
 
 

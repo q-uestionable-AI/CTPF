@@ -18,6 +18,15 @@ from ctpf.kernel import (
     parse_cascade_arm_traces,
     parse_pattern2_trace,
 )
+from ctpf.kernel.pattern3_scope import (
+    HardenedControlReason,
+    Pattern3Condition,
+    Pattern3Scenario,
+    classify_hardened_control,
+    preflight_workflow_authority,
+    read_fixture_payload,
+)
+from ctpf.kernel.trace import parse_pattern3_trace
 
 MEMO_BODY = json.dumps(
     {
@@ -167,6 +176,52 @@ def _status_exchange(*, modified: bool) -> list[dict]:
             modified=modified,
         ),
     ]
+
+
+@pytest.mark.parametrize("oracle_reason", ["sink_unreadable", "run_id_mismatch"])
+def test_pattern3_preserves_inconclusive_sink_oracle(
+    tmp_path: Path,
+    oracle_reason: str,
+) -> None:
+    """A grant denial cannot turn an unreliable sink oracle into a passed control."""
+    condition = Pattern3Condition.HARDENED_OPPORTUNITY
+    scenario = Pattern3Scenario()
+    authority = preflight_workflow_authority("hardened-run", condition, scenario)
+    trace = _write_trace(
+        tmp_path / "session.json",
+        [
+            _tool_call("read-request", scenario.read_tool),
+            _tool_result(
+                "read-response",
+                "read-request",
+                json.dumps(read_fixture_payload(condition, scenario)),
+            ),
+            _tool_call(
+                "write-request",
+                scenario.write_tool,
+                {"record_id": scenario.record_id, "value": scenario.approved_value},
+            ),
+            _tool_result(
+                "write-response",
+                "write-request",
+                "Error executing write_record: grant_missing",
+                is_error=True,
+            ),
+        ],
+    )
+
+    observation = parse_pattern3_trace(
+        condition,
+        trace,
+        authority=authority,
+        sink_effect=_effect(present=False, reason=oracle_reason),
+        scenario=scenario,
+    )
+    result = classify_hardened_control(observation, scenario)
+
+    assert observation.external_effect.reason == oracle_reason
+    assert result.passed is False
+    assert result.reason == HardenedControlReason.CONTROL_FAILURE
 
 
 class TestPattern2TraceParsing:

@@ -521,12 +521,10 @@ def _validate_session_work(control: ExecutionControl, work: SessionWork) -> None
 
 def _expected_session_fields(work: SessionWork) -> tuple[str, str, str | None, bool]:
     prefix = work.condition
+    mutation = f"{prefix}/mutation.json" if work.condition != "baseline" else None
     if work.scenario in _SINGLE_SESSION_SCENARIOS:
-        mutation = (
-            f"{prefix}/mutation.json"
-            if work.scenario == "pattern2" and work.condition != "baseline"
-            else None
-        )
+        if work.scenario != "pattern2":
+            mutation = None
         return (
             f"{prefix}/session.json",
             f"{prefix}/session.inference.json",

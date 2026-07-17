@@ -26,6 +26,7 @@ from ctpf.kernel.slice import (
 
 _CALL_TOOL_METHOD = "tools/call"
 _CLIENT_TO_SERVER = "client_to_server"
+_CONCLUSIVE_NO_EFFECT_REASONS = frozenset({"effect_not_applied", "sink_missing"})
 _SERVER_TO_CLIENT = "server_to_client"
 
 
@@ -397,7 +398,11 @@ def _pattern3_effect(
     sink_effect: ExternalEffect,
     notes: list[str],
 ) -> ExternalEffect:
-    if write_call is None or sink_effect.present:
+    if (
+        write_call is None
+        or sink_effect.present
+        or sink_effect.reason not in _CONCLUSIVE_NO_EFFECT_REASONS
+    ):
         return sink_effect
     reason = _pattern3_write_error_reason(records, write_call, notes)
     if reason is None:
