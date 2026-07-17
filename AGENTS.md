@@ -6,11 +6,11 @@ tool-specific rule set, or other second agent-instruction file.
 
 CTPF is an evidence-first research project for Capability Trust Propagation Failure (CTPF).
 The `ctpf` PyPI package and CLI are its reference research harness, not the project identity.
-Durable program guidance and sequence SSOT live in the lab vault mode card
-`C:\Users\richs\vaults\MLSecOps Lab\CTPF\Project Instructions.md`; current gates live in the
-active plan and `Boards/*`. When sequence changes, update those vault surfaces (and
-`Project-Status.md` only on milestones or clear staleness). Do not invent a parallel roadmap
-inside the repo.
+Private project governance is maintained outside this repository. For vault-governed work, read
+`CTPF/Project Instructions.md` beneath the operator-configured `CTPF_VAULT_ROOT`. If that location
+is unavailable, stop and request it from the operator. Current gates live in the active plan and
+`Boards/*`. When sequence changes, update those private governance surfaces (`Project-Status.md`
+only on milestones or clear staleness). Do not invent a parallel roadmap inside the repo.
 
 ## Critical Context
 
@@ -49,7 +49,8 @@ These are product invariants, not preferences.
 - Do not write transient plan/spec/session files into the repo.
   Use the OS temp directory if a scratch file is required.
 - Research findings, run evidence, session logs, evidence bundles, analysis notes, and
-  publication drafts belong in the lab's Obsidian vault, never in this repository.
+  publication drafts belong in the operator-configured private research workspace beneath
+  `CTPF_VAULT_ROOT`, never in this repository.
   The repository contains tool source, tests, synthetic fixtures, schemas, and tool docs.
 - Never create files in: `plans/*`, `design_docs/*`, `*/.plan`, `docs/superpowers/*`
 - Only write files to standard repo locations (`src/`, `tests/`, `docs/`) or paths named
