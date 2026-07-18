@@ -74,6 +74,7 @@ from ctpf.proxy.models import ProxyMessage
 
 POLICY_ID = "a" * 32
 TARGET_ID = "b" * 32
+SECOND_TARGET_ID = "c" * 32
 CONCURRENT_TIMEOUT_SECONDS = 10
 SECRET_VALUE = "super-secret-provider-token"
 PINS = ExperimentPins(
@@ -97,7 +98,10 @@ def _limits(*, cost: int = 0, provider_requests: int = 36) -> ResourceLimits:
     return ResourceLimits(3_240, provider_requests, 9_216, 9_216, 36, 4, cost)
 
 
-def _target(network: NetworkClass = NetworkClass.LOOPBACK) -> TargetPolicy:
+def _target(
+    network: NetworkClass = NetworkClass.LOOPBACK,
+    target_id: str = TARGET_ID,
+) -> TargetPolicy:
     endpoint = (
         "http://127.0.0.1:11434/v1"
         if network == NetworkClass.LOOPBACK
@@ -106,7 +110,7 @@ def _target(network: NetworkClass = NetworkClass.LOOPBACK) -> TargetPolicy:
     remote = network == NetworkClass.HTTPS_PUBLIC
     identity = target_identity_from_profile(
         driven_inference.OpenAICompatibleTargetProfile(
-            target_id=TARGET_ID,
+            target_id=target_id,
             name="adversarial target",
             endpoint=endpoint,
             model="test-model",
@@ -122,7 +126,7 @@ def _target(network: NetworkClass = NetworkClass.LOOPBACK) -> TargetPolicy:
         )
     )
     return TargetPolicy(
-        TARGET_ID,
+        target_id,
         identity.fingerprint,
         "inference",
         identity.behavior,
@@ -133,6 +137,10 @@ def _target(network: NetworkClass = NetworkClass.LOOPBACK) -> TargetPolicy:
         remote,
         remote,
     )
+
+
+def _matrix_limits() -> ResourceLimits:
+    return ResourceLimits(100_000, 100_000, 1_000_000, 1_000_000, 100_000, 4, 0)
 
 
 def _material(
@@ -179,6 +187,43 @@ def _material(
         ),
         output_root_id="research-evidence",
         limits=_limits(),
+    )
+    return policy, spec, output_root
+
+
+def _matrix_material(tmp_path: Path) -> tuple[PolicyDocument, RunSpec, Path]:
+    capability = scenario_capability("cascade-memo")
+    output_root = tmp_path / "research-evidence"
+    targets = (_target(target_id=TARGET_ID), _target(target_id=SECOND_TARGET_ID))
+    limits = _matrix_limits()
+    policy = PolicyDocument(
+        policy_id=POLICY_ID,
+        name="adversarial matrix policy",
+        created_at="2026-01-01T00:00:00Z",
+        expires_at="2027-01-01T00:00:00Z",
+        standing_tiers=(AuthorizationTier.LOCAL_SYNTHETIC,),
+        per_run_tiers=(),
+        scenarios=(ScenarioPolicy("cascade-memo", (capability.fingerprint,), (ExperimentMode.MATRIX,), 3),),
+        targets=targets,
+        output_roots=(OutputRootPolicy("research-evidence", str(output_root.resolve())),),
+        allowed_effects=capability.effect_ids,
+        limits=PolicyLimits(limits, 1, 300, 8765),
+    )
+    spec = RunSpec(
+        idempotency_key="agent-request-matrix-0001",
+        requester=Requester("agent", "unsafe-caller", "1"),
+        purpose="Exercise the packaged synthetic matrix scenario.",
+        policy_id=POLICY_ID,
+        requested_tier=AuthorizationTier.LOCAL_SYNTHETIC,
+        experiment=ExperimentRequest(
+            "cascade-memo",
+            capability.fingerprint,
+            ExperimentMode.MATRIX,
+            3,
+            tuple(TargetReference(target.target_id, target.target_fingerprint) for target in targets),
+        ),
+        output_root_id="research-evidence",
+        limits=limits,
     )
     return policy, spec, output_root
 
@@ -809,6 +854,59 @@ class TestWorkerDeathAndEvidenceTamper:
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         assert verify_evidence_bundle(bundle).ok is False
         caller.expect("hash_mismatch", lambda: caller.service.verify(run_id))
+
+    def test_control_verify_accepts_governed_matrix_trial_bundles(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        policy, spec, output_root = _matrix_material(tmp_path)
+        service = AutomationService(db_path=tmp_path / "ctpf.db")
+        approval.initialize_approval_key()
+        service.create_policy(policy)
+        started = service.start(spec)
+        output_root.mkdir()
+        _install_revalidation(monkeypatch)
+
+        async def complete(
+            control: execution_control.ExecutionControl,
+            profiles: tuple[object, ...],
+        ) -> SimpleNamespace:
+            assert profiles
+            control.run_root.mkdir(exist_ok=True)
+            records = []
+            for index in range(2):
+                source = _write_minimal_bundle(tmp_path / f"bundle-source-{index}")
+                target = control.run_root / "trials" / f"trial-{index}" / "evidence" / "bundle-v1"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source, target)
+                records.append(
+                    {
+                        "bundle": target.relative_to(control.run_root).as_posix(),
+                        "status": "complete",
+                    }
+                )
+            manifest = control.run_root / "matrix-manifest.json"
+            manifest.write_text(json.dumps({"trials": records}) + "\n", encoding="utf-8")
+            return SimpleNamespace(
+                manifest_path=manifest,
+                result={
+                    "manifest": manifest.name,
+                    "mode": "matrix",
+                    "scenario": "cascade-memo",
+                    "trials_completed": len(records),
+                },
+            )
+
+        monkeypatch.setattr("ctpf.experiment.run_governed_experiment", complete)
+        finished = asyncio.run(service.execute(str(started["run_id"])))
+
+        verification = service.verify(str(finished["run_id"]))
+
+        assert verification["ok"] is True
+        assert verification["mode"] == "matrix"
+        assert verification["verified_bundles"] == 2
 
 
 class TestScientificOverclaimAndSandboxResidual:

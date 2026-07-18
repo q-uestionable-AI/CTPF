@@ -299,21 +299,12 @@ class AutomationService:
         if result is None:
             raise ControlError("evidence_missing", "governed run has no mechanical result")
         bundle_rel = result.get("bundle")
-        if not isinstance(bundle_rel, str) or not bundle_rel.strip():
-            raise ControlError("evidence_missing", "mechanical result does not declare a bundle")
-        bundle_dir = _resolve_run_relative(Path(run.run_root), bundle_rel, "bundle")
-        from ctpf.kernel.verify import verify_evidence_bundle
-
-        verification = verify_evidence_bundle(bundle_dir)
-        payload = verification.to_payload()
-        payload["bundle"] = bundle_rel
-        payload["run_id"] = run.run_id
-        if not verification.ok:
-            issue = verification.failures[0] if verification.failures else None
-            code = issue.code if issue is not None else "manifest_invalid"
-            message = issue.message if issue is not None else "evidence verification failed"
-            raise ControlError(code, message, details={"verification": payload})
-        return payload
+        run_root = Path(run.run_root)
+        if isinstance(bundle_rel, str) and bundle_rel.strip():
+            return _verify_declared_bundle(run_root, bundle_rel, run.run_id)
+        if result.get("mode") == "matrix":
+            return _verify_matrix_manifest(run_root, result, run.run_id)
+        raise ControlError("evidence_missing", "mechanical result does not declare a bundle")
 
     def create_policy(
         self,
@@ -536,6 +527,83 @@ def _resolve_run_relative(run_root: Path, relative: str, label: str) -> Path:
     if not resolved.is_relative_to(boundary):
         raise ControlError("artifact_path_invalid", f"{label} path escapes the run root")
     return selected
+
+
+def _verify_declared_bundle(run_root: Path, bundle_rel: str, run_id: str) -> dict[str, Any]:
+    """Verify one run-relative bundle and raise a structured control error on failure."""
+    bundle_dir = _resolve_run_relative(run_root, bundle_rel, "bundle")
+    from ctpf.kernel.verify import verify_evidence_bundle
+
+    verification = verify_evidence_bundle(bundle_dir)
+    payload = verification.to_payload()
+    payload["bundle"] = bundle_rel
+    payload["run_id"] = run_id
+    if verification.ok:
+        return payload
+    issue = verification.failures[0] if verification.failures else None
+    code = issue.code if issue is not None else "manifest_invalid"
+    message = issue.message if issue is not None else "evidence verification failed"
+    raise ControlError(code, message, details={"verification": payload})
+
+
+def _verify_matrix_manifest(
+    run_root: Path,
+    result: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Verify every completed trial bundle declared by a governed matrix manifest."""
+    manifest_rel = result.get("manifest")
+    if not isinstance(manifest_rel, str) or not manifest_rel.strip():
+        raise ControlError("evidence_missing", "matrix result does not declare a manifest")
+    manifest_path = _resolve_run_relative(run_root, manifest_rel, "manifest")
+    manifest = _load_json_file_object(manifest_path, "matrix manifest")
+    bundles = _matrix_trial_bundles(manifest)
+    verifications = [_verify_declared_bundle(run_root, bundle, run_id) for bundle in bundles]
+    return {
+        "bundles": bundles,
+        "manifest": manifest_rel,
+        "mode": "matrix",
+        "ok": True,
+        "run_id": run_id,
+        "status": "passed",
+        "verified_bundles": len(verifications),
+        "verifications": verifications,
+    }
+
+
+def _load_json_file_object(path: Path, label: str) -> dict[str, Any]:
+    """Load one JSON object from a run-owned evidence file."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ControlError("evidence_missing", f"{label} is unreadable") from exc
+    if not raw.strip():
+        raise ControlError("manifest_invalid", f"{label} is empty")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ControlError("manifest_invalid", f"{label} is malformed") from exc
+    if not isinstance(payload, dict):
+        raise ControlError("manifest_invalid", f"{label} must be a JSON object")
+    return payload
+
+
+def _matrix_trial_bundles(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """Return completed trial bundle paths from a matrix manifest."""
+    trials = manifest.get("trials")
+    if not isinstance(trials, list) or not trials:
+        raise ControlError("evidence_missing", "matrix manifest has no trials")
+    bundles: list[str] = []
+    for raw_trial in trials:
+        if not isinstance(raw_trial, dict):
+            raise ControlError("manifest_invalid", "matrix trial record is malformed")
+        if raw_trial.get("status") != "complete":
+            raise ControlError("evidence_missing", "matrix manifest has incomplete trial evidence")
+        bundle_rel = raw_trial.get("bundle")
+        if not isinstance(bundle_rel, str) or not bundle_rel.strip():
+            raise ControlError("evidence_missing", "matrix trial does not declare a bundle")
+        bundles.append(bundle_rel)
+    return tuple(bundles)
 
 
 def _validate_execution_binding(
