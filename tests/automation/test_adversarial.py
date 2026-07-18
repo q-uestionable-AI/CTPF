@@ -228,8 +228,7 @@ def _matrix_material(tmp_path: Path) -> tuple[PolicyDocument, RunSpec, Path]:
             ExperimentMode.MATRIX,
             3,
             tuple(
-                TargetReference(target.target_id, target.target_fingerprint)
-                for target in targets
+                TargetReference(target.target_id, target.target_fingerprint) for target in targets
             ),
         ),
         output_root_id="research-evidence",
