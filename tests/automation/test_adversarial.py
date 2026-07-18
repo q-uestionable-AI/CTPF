@@ -203,7 +203,14 @@ def _matrix_material(tmp_path: Path) -> tuple[PolicyDocument, RunSpec, Path]:
         expires_at="2027-01-01T00:00:00Z",
         standing_tiers=(AuthorizationTier.LOCAL_SYNTHETIC,),
         per_run_tiers=(),
-        scenarios=(ScenarioPolicy("cascade-memo", (capability.fingerprint,), (ExperimentMode.MATRIX,), 3),),
+        scenarios=(
+            ScenarioPolicy(
+                "cascade-memo",
+                (capability.fingerprint,),
+                (ExperimentMode.MATRIX,),
+                3,
+            ),
+        ),
         targets=targets,
         output_roots=(OutputRootPolicy("research-evidence", str(output_root.resolve())),),
         allowed_effects=capability.effect_ids,
@@ -220,7 +227,10 @@ def _matrix_material(tmp_path: Path) -> tuple[PolicyDocument, RunSpec, Path]:
             capability.fingerprint,
             ExperimentMode.MATRIX,
             3,
-            tuple(TargetReference(target.target_id, target.target_fingerprint) for target in targets),
+            tuple(
+                TargetReference(target.target_id, target.target_fingerprint)
+                for target in targets
+            ),
         ),
         output_root_id="research-evidence",
         limits=limits,
