@@ -506,6 +506,19 @@ def test_session_work_rejects_path_traversal() -> None:
         execution_control.SessionWork.from_payload(payload)
 
 
+def _session_control(mode: ExperimentMode = ExperimentMode.SINGLE) -> SimpleNamespace:
+    return SimpleNamespace(
+        run_id="run",
+        spec=SimpleNamespace(
+            experiment=SimpleNamespace(mode=mode, scenario="cascade-memo"),
+        ),
+        capability=SimpleNamespace(conditions={"baseline", "manipulated", "legitimate"}),
+        policy=SimpleNamespace(limits=SimpleNamespace(loopback_port=8765)),
+        target_policy=lambda _target_id: None,
+        path=Path,
+    )
+
+
 @pytest.mark.parametrize(
     ("condition", "expected_mutation"),
     [("baseline", None), ("manipulated", "manipulated/mutation.json")],
@@ -529,9 +542,87 @@ def test_cascade_session_a_retains_condition_mutation(
         listen_port=8765,
     )
 
-    assert execution_control._expected_session_fields(work) == (
+    assert execution_control._expected_session_fields(_session_control(), work) == (
         f"{condition}/session-A.json",
         f"{condition}/session-A.inference.json",
         expected_mutation,
         True,
+        f"run-{condition}",
     )
+
+
+def test_cascade_matrix_session_accepts_trial_artifact_prefix() -> None:
+    """Governed matrix trials keep their nested trial-series artifact contract."""
+    series_id = "cascade-memo-20260719T110203Z-1234abcd"
+    condition = "manipulated"
+    work = execution_control.SessionWork(
+        work_id="c" * 32,
+        scenario="cascade-memo",
+        condition=condition,
+        session_name="A",
+        target_id=TARGET_ID,
+        fixture_run_id=f"{series_id}-{condition}",
+        trace_path=f"trials/{series_id}/{condition}/session-A.json",
+        inference_path=f"trials/{series_id}/{condition}/session-A.inference.json",
+        mutation_path=f"trials/{series_id}/{condition}/mutation.json",
+        reset=True,
+        listen_port=8765,
+    )
+
+    control = _session_control(ExperimentMode.MATRIX)
+    validated_paths: list[str] = []
+    control.path = validated_paths.append
+
+    execution_control._validate_session_work(control, work)
+
+    assert execution_control._expected_session_fields(control, work) == (
+        f"trials/{series_id}/{condition}/session-A.json",
+        f"trials/{series_id}/{condition}/session-A.inference.json",
+        f"trials/{series_id}/{condition}/mutation.json",
+        True,
+        f"{series_id}-{condition}",
+    )
+    assert validated_paths == [work.trace_path, work.inference_path, work.mutation_path]
+
+
+def test_cascade_matrix_session_rejects_direct_artifact_prefix() -> None:
+    """Matrix work cannot collapse a trial into the parent run artifact layout."""
+    condition = "baseline"
+    work = execution_control.SessionWork(
+        work_id="c" * 32,
+        scenario="cascade-memo",
+        condition=condition,
+        session_name="B",
+        target_id=TARGET_ID,
+        fixture_run_id=f"run-{condition}",
+        trace_path=f"{condition}/session-B.json",
+        inference_path=f"{condition}/session-B.inference.json",
+        mutation_path=None,
+        reset=False,
+        listen_port=8765,
+    )
+
+    with pytest.raises(execution_control.ExecutionInterruptedError, match="matrix work"):
+        execution_control._validate_session_work(_session_control(ExperimentMode.MATRIX), work)
+
+
+def test_cascade_single_session_rejects_trial_artifact_prefix() -> None:
+    """Only matrix RunSpecs may prepare nested trial session artifacts."""
+    series_id = "cascade-memo-20260719T110203Z-1234abcd"
+    condition = "baseline"
+    work = execution_control.SessionWork(
+        work_id="c" * 32,
+        scenario="cascade-memo",
+        condition=condition,
+        session_name="B",
+        target_id=TARGET_ID,
+        fixture_run_id=f"{series_id}-{condition}",
+        trace_path=f"trials/{series_id}/{condition}/session-B.json",
+        inference_path=f"trials/{series_id}/{condition}/session-B.inference.json",
+        mutation_path=None,
+        reset=False,
+        listen_port=8765,
+    )
+
+    with pytest.raises(execution_control.ExecutionInterruptedError, match="artifacts"):
+        execution_control._expected_session_fields(_session_control(), work)
