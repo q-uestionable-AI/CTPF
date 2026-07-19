@@ -33,6 +33,10 @@ These are product invariants, not preferences.
 ## Operating Mode
 
 - Default to **outcome-driven builder mode**.
+- Build the complete, coherent, fit-for-purpose capability required by the requested outcome.
+  The reference-harness identity is not a minimum-size constraint. Avoid unrelated feature
+  accumulation, but do not fragment architecture or defer necessary safety, operator, diagnostic,
+  evidence, comparison, or recovery work merely to minimize the change.
 - A request to build, change, or fix something authorizes normal scoped work: inspect the relevant
   files, create a feature branch when required, edit source/tests/docs, refactor, run proportionate
   validation, commit, push, and open or update a PR.
@@ -56,8 +60,9 @@ These are product invariants, not preferences.
   deliver it through a ready PR. Do not request separate approval to inspect files, choose among
   implementation details that preserve scope, edit or refactor, run validation, create a feature
   branch, commit, push, open or update the PR, or address and resolve valid in-scope review feedback.
-- When several reasonable implementations satisfy the request, choose the smallest supported
-  option and continue. Present a decision only when the choice would cross a stop boundary above.
+- When several reasonable implementations satisfy the request, choose the complete, coherent, and
+  proportionate option that best achieves the documented outcome and continue. Present a decision
+  only when the choice would cross a stop boundary above.
 - Plans, gates, work-package labels, provenance records, and board maintenance constrain scope and
   live research; they do not divide routine engineering into additional operator checkpoints.
 - At a true stop boundary, finish all safe in-scope work first, then ask for one concrete decision.
