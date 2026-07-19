@@ -34,9 +34,10 @@ The bundle verifies that the captured record is internally consistent. It does n
 that an independent outsider can reproduce the experiment or that the result generalizes.
 
 On source `main`, `ctpf experiment control verify` runs that internal-consistency check against the
-bundle declared by a governed run result. It does not establish independent authenticity, scientific
-validity, or generality. Stable mechanical reason codes travel with the result; they are not human
-adjudication.
+bundle declared by a governed single-run result. For a governed matrix, it requires a completed
+series manifest bound to the immutable RunSpec and verifies the exact unique set of trial bundles
+and result linkages. It does not establish independent authenticity, scientific validity, or
+generality. Stable mechanical reason codes travel with the result; they are not human adjudication.
 
 ## Authoritative discovery
 
@@ -54,7 +55,7 @@ by scenario, but the roles do not):
 
 `evidence_complete` means required inputs were readable. It is not a positive observation.
 Invocation is not external effect. On source `main`, `ctpf experiment control verify` checks bundle
-internal consistency only.
+internal consistency and matrix result linkage only.
 
 ## Experiment evidence versus SQLite state
 

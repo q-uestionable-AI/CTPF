@@ -154,9 +154,9 @@ expand in competition with dedicated external scanners.
 ## Agent-operable lifecycle (source `main`)
 
 `ctpf experiment control` accepts canonical RunSpec JSON, evaluates signed policy, claims leases,
-reserves budgets, executes packaged scenarios, and returns mechanical results plus
-`control verify` for bundle internal consistency. `ctpf experiment govern` issues and revokes the
-local signing key, policies, and approvals on an interactive TTY.
+reserves budgets, executes packaged scenarios, and returns mechanical results plus `control verify`
+for single-bundle or exact matrix bundle-set internal consistency. `ctpf experiment govern` issues
+and revokes the local signing key, policies, and approvals on an interactive TTY.
 
 Adapters are optional later. They do not own policy, credentials, execution, evidence, or science.
 

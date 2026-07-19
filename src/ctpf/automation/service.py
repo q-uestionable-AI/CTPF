@@ -89,6 +89,9 @@ _TERMINAL_STATES = {
     AutomationRunState.CANCELLED,
     AutomationRunState.INTERRUPTED,
 }
+_MATRIX_SCHEMA_VERSION = 1
+_PRIMARY_TRANSITION_NAME = "trust_transition.json"
+_HARDENED_TRANSITION_NAME = "artifacts/hardened/trust-transition.json"
 
 
 @dataclass(frozen=True)
@@ -299,21 +302,13 @@ class AutomationService:
         if result is None:
             raise ControlError("evidence_missing", "governed run has no mechanical result")
         bundle_rel = result.get("bundle")
-        if not isinstance(bundle_rel, str) or not bundle_rel.strip():
-            raise ControlError("evidence_missing", "mechanical result does not declare a bundle")
-        bundle_dir = _resolve_run_relative(Path(run.run_root), bundle_rel, "bundle")
-        from ctpf.kernel.verify import verify_evidence_bundle
-
-        verification = verify_evidence_bundle(bundle_dir)
-        payload = verification.to_payload()
-        payload["bundle"] = bundle_rel
-        payload["run_id"] = run.run_id
-        if not verification.ok:
-            issue = verification.failures[0] if verification.failures else None
-            code = issue.code if issue is not None else "manifest_invalid"
-            message = issue.message if issue is not None else "evidence verification failed"
-            raise ControlError(code, message, details={"verification": payload})
-        return payload
+        run_root = Path(run.run_root)
+        if isinstance(bundle_rel, str) and bundle_rel.strip():
+            return _verify_declared_bundle(run_root, bundle_rel, run.run_id)
+        if result.get("mode") == "matrix":
+            spec = _stored_run_spec(run)
+            return _verify_matrix_manifest(run_root, result, run, spec)
+        raise ControlError("evidence_missing", "mechanical result does not declare a bundle")
 
     def create_policy(
         self,
@@ -536,6 +531,238 @@ def _resolve_run_relative(run_root: Path, relative: str, label: str) -> Path:
     if not resolved.is_relative_to(boundary):
         raise ControlError("artifact_path_invalid", f"{label} path escapes the run root")
     return selected
+
+
+def _verify_declared_bundle(run_root: Path, bundle_rel: str, run_id: str) -> dict[str, Any]:
+    """Verify one run-relative bundle and raise a structured control error on failure."""
+    bundle_dir = _resolve_run_relative(run_root, bundle_rel, "bundle")
+    from ctpf.kernel.verify import verify_evidence_bundle
+
+    verification = verify_evidence_bundle(bundle_dir)
+    payload = verification.to_payload()
+    payload["bundle"] = bundle_rel
+    payload["run_id"] = run_id
+    if verification.ok:
+        return payload
+    issue = verification.failures[0] if verification.failures else None
+    code = issue.code if issue is not None else "manifest_invalid"
+    message = issue.message if issue is not None else "evidence verification failed"
+    raise ControlError(code, message, details={"verification": payload})
+
+
+def _verify_matrix_manifest(
+    run_root: Path,
+    result: dict[str, Any],
+    run: AutomationRunRecord,
+    spec: RunSpec,
+) -> dict[str, Any]:
+    """Verify every completed trial bundle declared by a governed matrix manifest."""
+    manifest_rel = result.get("manifest")
+    if not isinstance(manifest_rel, str) or not manifest_rel.strip():
+        raise ControlError("evidence_missing", "matrix result does not declare a manifest")
+    manifest_path = _resolve_run_relative(run_root, manifest_rel, "manifest")
+    _require_recorded_manifest(run, manifest_path)
+    manifest = _load_json_file_object(manifest_path, "matrix manifest")
+    bundles = _matrix_trial_bundles(manifest, result, spec, run.run_id)
+    raw_trials = manifest["trials"]
+    verifications = [
+        _verify_matrix_trial(run_root, bundle, raw_trial, run.run_id)
+        for bundle, raw_trial in zip(bundles, raw_trials, strict=True)
+    ]
+    return {
+        "bundles": bundles,
+        "manifest": manifest_rel,
+        "mode": "matrix",
+        "ok": True,
+        "run_id": run.run_id,
+        "status": "passed",
+        "verified_bundles": len(verifications),
+        "verifications": verifications,
+    }
+
+
+def _require_recorded_manifest(run: AutomationRunRecord, manifest_path: Path) -> None:
+    """Require the result manifest to match the path claimed by the execution record."""
+    if run.manifest_path is None:
+        raise ControlError("evidence_missing", "governed run has no recorded manifest")
+    try:
+        selected = manifest_path.resolve(strict=False)
+        recorded = Path(run.manifest_path).resolve(strict=False)
+    except OSError as exc:
+        raise ControlError("evidence_missing", "matrix manifest path is unreadable") from exc
+    if selected != recorded:
+        raise ControlError(
+            "result_manifest_mismatch",
+            "matrix result manifest differs from the recorded run manifest",
+        )
+
+
+def _verify_matrix_trial(
+    run_root: Path,
+    bundle_rel: str,
+    raw_trial: object,
+    run_id: str,
+) -> dict[str, Any]:
+    """Verify one matrix bundle and its result linkage to the trial record."""
+    verification = _verify_declared_bundle(run_root, bundle_rel, run_id)
+    if not isinstance(raw_trial, dict):
+        raise ControlError("manifest_invalid", "matrix trial record is malformed")
+    bundle_dir = _resolve_run_relative(run_root, bundle_rel, "bundle")
+    primary = _load_json_file_object(
+        bundle_dir / _PRIMARY_TRANSITION_NAME,
+        "matrix primary transition",
+    )
+    hardened = _load_json_file_object(
+        bundle_dir.joinpath(*PurePosixPath(_HARDENED_TRANSITION_NAME).parts),
+        "matrix hardened transition",
+    )
+    if raw_trial.get("primary_result") != primary.get("promotion_result") or raw_trial.get(
+        "hardened_result"
+    ) != hardened.get("promotion_result"):
+        raise ControlError(
+            "result_manifest_mismatch",
+            "matrix trial results differ from the verified bundle",
+        )
+    return verification
+
+
+def _load_json_file_object(path: Path, label: str) -> dict[str, Any]:
+    """Load one JSON object from a run-owned evidence file."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except UnicodeError as exc:
+        raise ControlError("manifest_invalid", f"{label} is not valid UTF-8") from exc
+    except OSError as exc:
+        raise ControlError("evidence_missing", f"{label} is unreadable") from exc
+    if not raw.strip():
+        raise ControlError("manifest_invalid", f"{label} is empty")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ControlError("manifest_invalid", f"{label} is malformed") from exc
+    if not isinstance(payload, dict):
+        raise ControlError("manifest_invalid", f"{label} must be a JSON object")
+    return payload
+
+
+def _matrix_trial_bundles(
+    manifest: dict[str, Any],
+    result: dict[str, Any],
+    spec: RunSpec,
+    run_id: str,
+) -> tuple[str, ...]:
+    """Return completed trial bundle paths from a matrix manifest."""
+    expected = _require_matrix_manifest_header(manifest, result, spec, run_id)
+    trials = manifest.get("trials")
+    if not isinstance(trials, list) or not trials:
+        raise ControlError("evidence_missing", "matrix manifest has no trials")
+    if len(trials) != len(expected):
+        raise ControlError("evidence_missing", "matrix manifest trial count is incomplete")
+    bundles: list[str] = []
+    identities: list[tuple[str, int]] = []
+    series_ids: list[str] = []
+    for raw_trial in trials:
+        identity, bundle_rel, series_id = _matrix_trial_bundle(raw_trial)
+        if identity not in expected:
+            raise ControlError("result_manifest_mismatch", "matrix trial identity is unexpected")
+        identities.append(identity)
+        bundles.append(bundle_rel)
+        series_ids.append(series_id)
+    if len(set(identities)) != len(identities):
+        raise ControlError("manifest_invalid", "matrix manifest repeats a trial identity")
+    if len({series_id.casefold() for series_id in series_ids}) != len(series_ids):
+        raise ControlError("manifest_invalid", "matrix manifest repeats a trial series ID")
+    if len({bundle.casefold() for bundle in bundles}) != len(bundles):
+        raise ControlError("manifest_invalid", "matrix manifest repeats a trial bundle")
+    if set(identities) != expected:
+        raise ControlError("evidence_missing", "matrix manifest omits required trial evidence")
+    return tuple(bundles)
+
+
+def _require_matrix_manifest_header(
+    manifest: dict[str, Any],
+    result: dict[str, Any],
+    spec: RunSpec,
+    run_id: str,
+) -> set[tuple[str, int]]:
+    """Validate matrix-level identity and return the exact expected trial identities."""
+    experiment = spec.experiment
+    if experiment.mode.value != "matrix":
+        raise ControlError("result_manifest_mismatch", "run is not authorized for matrix mode")
+    if manifest.get("schema_version") != _MATRIX_SCHEMA_VERSION:
+        raise ControlError("manifest_invalid", "matrix manifest schema is unsupported")
+    if manifest.get("status") != "complete":
+        raise ControlError("evidence_missing", "matrix manifest is not complete")
+    if (
+        manifest.get("scenario") != experiment.scenario
+        or manifest.get("series_id") != run_id
+        or manifest.get("trials_per_model") != experiment.trials_per_target
+        or result.get("scenario") != experiment.scenario
+    ):
+        raise ControlError("result_manifest_mismatch", "matrix manifest identity does not match")
+    target_ids = tuple(target.target_id for target in experiment.targets)
+    if _matrix_manifest_target_ids(manifest) != target_ids:
+        raise ControlError("result_manifest_mismatch", "matrix manifest targets do not match")
+    expected = {
+        (target_id, trial)
+        for target_id in target_ids
+        for trial in range(1, experiment.trials_per_target + 1)
+    }
+    if result.get("trials_completed") != len(expected):
+        raise ControlError("result_manifest_mismatch", "matrix result trial count does not match")
+    return expected
+
+
+def _matrix_manifest_target_ids(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """Return well-formed target IDs declared by a matrix manifest."""
+    targets = manifest.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ControlError("manifest_invalid", "matrix manifest targets are malformed")
+    target_ids: list[str] = []
+    for target in targets:
+        if not isinstance(target, dict) or not isinstance(target.get("target_id"), str):
+            raise ControlError("manifest_invalid", "matrix manifest target is malformed")
+        target_ids.append(target["target_id"])
+    return tuple(target_ids)
+
+
+def _matrix_trial_bundle(raw_trial: object) -> tuple[tuple[str, int], str, str]:
+    """Validate one trial record and return its identity and bundle path."""
+    if not isinstance(raw_trial, dict):
+        raise ControlError("manifest_invalid", "matrix trial record is malformed")
+    if raw_trial.get("status") != "complete":
+        raise ControlError("evidence_missing", "matrix manifest has incomplete trial evidence")
+    target_id = raw_trial.get("target_id")
+    trial = raw_trial.get("trial")
+    series_id = raw_trial.get("series_id")
+    bundle = raw_trial.get("bundle")
+    if not isinstance(target_id, str) or not target_id.strip():
+        raise ControlError("manifest_invalid", "matrix trial target is malformed")
+    if not isinstance(trial, int) or isinstance(trial, bool):
+        raise ControlError("manifest_invalid", "matrix trial number is malformed")
+    if not isinstance(series_id, str) or not series_id.strip():
+        raise ControlError("manifest_invalid", "matrix trial series ID is malformed")
+    if PurePosixPath(series_id).parts != (series_id,) or any(char in series_id for char in "\\:"):
+        raise ControlError("manifest_invalid", "matrix trial series ID is unsafe")
+    if not isinstance(bundle, str) or not bundle.strip():
+        raise ControlError("evidence_missing", "matrix trial does not declare a bundle")
+    _require_matrix_trial_paths(raw_trial, series_id, bundle)
+    return (target_id, trial), bundle, series_id
+
+
+def _require_matrix_trial_paths(
+    raw_trial: dict[str, Any],
+    series_id: str,
+    bundle: str,
+) -> None:
+    """Require a trial record's paths to remain under its exact series root."""
+    run_root = PurePosixPath("trials", series_id).as_posix()
+    if raw_trial.get("run_root") != run_root:
+        raise ControlError("result_manifest_mismatch", "matrix trial root does not match")
+    if raw_trial.get("run_manifest") != f"{run_root}/run-manifest.json":
+        raise ControlError("result_manifest_mismatch", "matrix trial manifest does not match")
+    if PurePosixPath(bundle).parts[:2] != PurePosixPath(run_root).parts:
+        raise ControlError("result_manifest_mismatch", "matrix trial bundle does not match")
 
 
 def _validate_execution_binding(
@@ -913,6 +1140,14 @@ def _stored_object(raw: str, label: str) -> dict[str, Any]:
         return load_canonical_object(raw)
     except CanonicalizationError as exc:
         raise ControlError("run_state_conflict", f"stored {label} is malformed") from exc
+
+
+def _stored_run_spec(run: AutomationRunRecord) -> RunSpec:
+    """Load the immutable RunSpec bound to a stored automation run."""
+    try:
+        return RunSpec.from_payload(_stored_object(run.spec_json, "spec_json"))
+    except ValueError as exc:
+        raise ControlError("run_state_conflict", "stored RunSpec is malformed") from exc
 
 
 def _optional_stored_object(raw: str | None, label: str) -> dict[str, Any] | None:
