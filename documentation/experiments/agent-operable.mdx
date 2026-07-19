@@ -82,8 +82,10 @@ the human governance surface; the agent must not mutate a rejected RunSpec to ga
 `control result` returns a mechanical record with stable promotion result and reason codes. It does
 not contain a human conclusion or publication claim.
 
-`control verify` checks the declared evidence bundle for internal consistency (manifest, hashes,
-schema). It does not prove independent authenticity, scientific validity, or generality.
+`control verify` checks declared evidence for internal consistency (manifest, hashes, schema). For
+a matrix run, it binds the completed series manifest to the immutable RunSpec and verifies the
+exact unique set of per-trial bundles and mechanical results. It does not prove independent
+authenticity, scientific validity, or generality.
 
 ## Deployment residual
 

@@ -77,6 +77,8 @@ TARGET_ID = "b" * 32
 SECOND_TARGET_ID = "c" * 32
 CONCURRENT_TIMEOUT_SECONDS = 10
 SECRET_VALUE = "super-secret-provider-token"
+HARDENED_TRANSITION_NAME = "hardened/trust-transition.json"
+SERIES_MANIFEST_NAME = "series-manifest.json"
 PINS = ExperimentPins(
     agent="adversarial-caller",
     model="test-model",
@@ -321,10 +323,15 @@ def _write_minimal_bundle(root: Path) -> Path:
     baseline_trace = root / "baseline.json"
     manipulated_trace = root / "manipulated.json"
     sink = root / "sink.json"
+    hardened_transition = root / "hardened-transition.json"
     root.mkdir(parents=True, exist_ok=True)
     baseline_trace.write_text("{}\n", encoding="utf-8")
     manipulated_trace.write_text("{}\n", encoding="utf-8")
     sink.write_text(json.dumps({"effect": "applied", "action": "approve_refund"}), encoding="utf-8")
+    hardened_transition.write_text(
+        json.dumps({"promotion_result": transition.promotion_result.value}) + "\n",
+        encoding="utf-8",
+    )
     return write_evidence_bundle(
         root / "bundle",
         result=transition,
@@ -336,10 +343,104 @@ def _write_minimal_bundle(root: Path) -> Path:
         ),
         artifacts={
             BASELINE_TRACE_NAME: baseline_trace,
+            HARDENED_TRANSITION_NAME: hardened_transition,
             MANIPULATED_TRACE_NAME: manipulated_trace,
             MANIPULATED_SINK_NAME: sink,
         },
     ).root
+
+
+def _write_matrix_trial_records(
+    control: execution_control.ExecutionControl,
+    tmp_path: Path,
+    spec: RunSpec,
+) -> list[dict[str, Any]]:
+    """Write complete matrix trial bundles matching one exact RunSpec."""
+    records: list[dict[str, Any]] = []
+    index = 0
+    for reference in spec.experiment.targets:
+        for trial in range(1, spec.experiment.trials_per_target + 1):
+            series_id = f"trial-{index}"
+            run_root = f"trials/{series_id}"
+            source = _write_minimal_bundle(tmp_path / f"bundle-source-{index}")
+            target = control.run_root / run_root / "evidence" / "bundle-v1"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, target)
+            run_manifest = control.run_root / run_root / "run-manifest.json"
+            run_manifest.write_text("{}\n", encoding="utf-8")
+            records.append(
+                {
+                    "bundle": target.relative_to(control.run_root).as_posix(),
+                    "hardened_result": PromotionResult.CONFIRMED.value,
+                    "primary_result": PromotionResult.CONFIRMED.value,
+                    "run_manifest": run_manifest.relative_to(control.run_root).as_posix(),
+                    "run_root": run_root,
+                    "series_id": series_id,
+                    "status": "complete",
+                    "target_id": reference.target_id,
+                    "trial": trial,
+                }
+            )
+            index += 1
+    return records
+
+
+def _matrix_manifest_payload(
+    control: execution_control.ExecutionControl,
+    spec: RunSpec,
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return a matrix manifest bound to the exact governed run."""
+    return {
+        "scenario": spec.experiment.scenario,
+        "schema_version": 1,
+        "series_id": control.run_id,
+        "status": "complete",
+        "targets": [{"target_id": target.target_id} for target in spec.experiment.targets],
+        "trials": records,
+        "trials_per_model": spec.experiment.trials_per_target,
+    }
+
+
+def _completed_matrix_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[AutomationService, str, Path]:
+    """Execute a deterministic completed matrix through the governed service."""
+    policy, spec, output_root = _matrix_material(tmp_path)
+    service = AutomationService(db_path=tmp_path / "ctpf.db")
+    approval.initialize_approval_key()
+    service.create_policy(policy)
+    started = service.start(spec)
+    output_root.mkdir()
+    _install_revalidation(monkeypatch)
+
+    async def complete(
+        control: execution_control.ExecutionControl,
+        profiles: tuple[object, ...],
+    ) -> SimpleNamespace:
+        assert profiles
+        control.run_root.mkdir(exist_ok=True)
+        records = _write_matrix_trial_records(control, tmp_path, spec)
+        manifest = control.run_root / SERIES_MANIFEST_NAME
+        manifest.write_text(
+            json.dumps(_matrix_manifest_payload(control, spec, records)) + "\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            manifest_path=manifest,
+            result={
+                "manifest": manifest.name,
+                "mode": "matrix",
+                "scenario": spec.experiment.scenario,
+                "trials_completed": len(records),
+            },
+        )
+
+    monkeypatch.setattr("ctpf.experiment.run_governed_experiment", complete)
+    finished = asyncio.run(service.execute(str(started["run_id"])))
+    run_id = str(finished["run_id"])
+    return service, run_id, output_root / run_id / SERIES_MANIFEST_NAME
 
 
 class _ToolBoundaryControl:
@@ -870,52 +971,108 @@ class TestWorkerDeathAndEvidenceTamper:
         fake_keyring: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        policy, spec, output_root = _matrix_material(tmp_path)
-        service = AutomationService(db_path=tmp_path / "ctpf.db")
-        approval.initialize_approval_key()
-        service.create_policy(policy)
-        started = service.start(spec)
-        output_root.mkdir()
-        _install_revalidation(monkeypatch)
+        service, run_id, _ = _completed_matrix_run(tmp_path, monkeypatch)
 
-        async def complete(
-            control: execution_control.ExecutionControl,
-            profiles: tuple[object, ...],
-        ) -> SimpleNamespace:
-            assert profiles
-            control.run_root.mkdir(exist_ok=True)
-            records = []
-            for index in range(2):
-                source = _write_minimal_bundle(tmp_path / f"bundle-source-{index}")
-                target = control.run_root / "trials" / f"trial-{index}" / "evidence" / "bundle-v1"
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(source, target)
-                records.append(
-                    {
-                        "bundle": target.relative_to(control.run_root).as_posix(),
-                        "status": "complete",
-                    }
-                )
-            manifest = control.run_root / "matrix-manifest.json"
-            manifest.write_text(json.dumps({"trials": records}) + "\n", encoding="utf-8")
-            return SimpleNamespace(
-                manifest_path=manifest,
-                result={
-                    "manifest": manifest.name,
-                    "mode": "matrix",
-                    "scenario": "cascade-memo",
-                    "trials_completed": len(records),
-                },
-            )
-
-        monkeypatch.setattr("ctpf.experiment.run_governed_experiment", complete)
-        finished = asyncio.run(service.execute(str(started["run_id"])))
-
-        verification = service.verify(str(finished["run_id"]))
+        verification = service.verify(run_id)
 
         assert verification["ok"] is True
         assert verification["mode"] == "matrix"
-        assert verification["verified_bundles"] == 2
+        assert verification["verified_bundles"] == 6
+
+    def test_control_verify_rejects_truncated_matrix_manifest(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service, run_id, manifest_path = _completed_matrix_run(tmp_path, monkeypatch)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["trials"].pop()
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+        with pytest.raises(
+            ControlError, match="matrix manifest trial count is incomplete"
+        ) as caught:
+            service.verify(run_id)
+
+        assert caught.value.code == "evidence_missing"
+
+    def test_control_verify_rejects_duplicate_matrix_bundle(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service, run_id, manifest_path = _completed_matrix_run(tmp_path, monkeypatch)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        first = manifest["trials"][0]
+        second = manifest["trials"][1]
+        for field in ("bundle", "run_manifest", "run_root", "series_id"):
+            second[field] = first[field]
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+        with pytest.raises(ControlError, match="repeats a trial series ID") as caught:
+            service.verify(run_id)
+
+        assert caught.value.code == "manifest_invalid"
+
+    @pytest.mark.parametrize(
+        ("field", "value", "code"),
+        (
+            ("series_id", "wrong-run-id", "result_manifest_mismatch"),
+            ("status", "running", "evidence_missing"),
+            ("targets", [{"target_id": TARGET_ID}], "result_manifest_mismatch"),
+            ("trials_per_model", 4, "result_manifest_mismatch"),
+        ),
+    )
+    def test_control_verify_rejects_matrix_manifest_contract_mismatch(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        field: str,
+        value: object,
+        code: str,
+    ) -> None:
+        service, run_id, manifest_path = _completed_matrix_run(tmp_path, monkeypatch)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[field] = value
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+        with pytest.raises(ControlError) as caught:
+            service.verify(run_id)
+
+        assert caught.value.code == code
+
+    def test_control_verify_rejects_matrix_trial_result_mismatch(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service, run_id, manifest_path = _completed_matrix_run(tmp_path, monkeypatch)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["trials"][0]["primary_result"] = PromotionResult.NOT_OBSERVED.value
+        manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+
+        with pytest.raises(ControlError, match="differ from the verified bundle") as caught:
+            service.verify(run_id)
+
+        assert caught.value.code == "result_manifest_mismatch"
+
+    def test_control_verify_rejects_invalid_utf8_matrix_manifest(
+        self,
+        tmp_path: Path,
+        fake_keyring: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service, run_id, manifest_path = _completed_matrix_run(tmp_path, monkeypatch)
+        manifest_path.write_bytes(b"\xff")
+
+        with pytest.raises(ControlError, match="not valid UTF-8") as caught:
+            service.verify(run_id)
+
+        assert caught.value.code == "manifest_invalid"
 
 
 class TestScientificOverclaimAndSandboxResidual:
