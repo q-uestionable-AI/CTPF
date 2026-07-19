@@ -19,6 +19,7 @@ from ctpf.automation.canonical import CanonicalizationError, load_canonical_obje
 from ctpf.automation.contracts import (
     AuthorizationGrant,
     AutomationRunState,
+    ExperimentMode,
     PolicyDocument,
     RunSpec,
     TargetPolicy,
@@ -508,10 +509,14 @@ def _validate_session_work(control: ExecutionControl, work: SessionWork) -> None
         raise ExecutionInterruptedError("session name is not installed")
     if work.listen_port != control.policy.limits.loopback_port:
         raise ExecutionInterruptedError("session loopback port differs from signed policy")
-    if work.fixture_run_id != f"{control.run_id}-{work.condition}":
-        raise ExecutionInterruptedError("session fixture run ID differs from installed work")
-    expected = _expected_session_fields(work)
-    actual = (work.trace_path, work.inference_path, work.mutation_path, work.reset)
+    expected = _expected_session_fields(control, work)
+    actual = (
+        work.trace_path,
+        work.inference_path,
+        work.mutation_path,
+        work.reset,
+        work.fixture_run_id,
+    )
     if actual != expected:
         raise ExecutionInterruptedError("session artifacts differ from installed work")
     for relative in (work.trace_path, work.inference_path, work.mutation_path):
@@ -519,8 +524,11 @@ def _validate_session_work(control: ExecutionControl, work: SessionWork) -> None
             control.path(relative)
 
 
-def _expected_session_fields(work: SessionWork) -> tuple[str, str, str | None, bool]:
-    prefix = work.condition
+def _expected_session_fields(
+    control: ExecutionControl,
+    work: SessionWork,
+) -> tuple[str, str, str | None, bool, str]:
+    prefix, series_id = _session_prefix_and_series(control, work)
     mutation = f"{prefix}/mutation.json" if work.condition != "baseline" else None
     if work.scenario in _SINGLE_SESSION_SCENARIOS:
         if work.scenario != "pattern2":
@@ -530,6 +538,7 @@ def _expected_session_fields(work: SessionWork) -> tuple[str, str, str | None, b
             f"{prefix}/session.inference.json",
             mutation,
             True,
+            f"{series_id}-{work.condition}",
         )
     label = work.session_name
     return (
@@ -537,7 +546,29 @@ def _expected_session_fields(work: SessionWork) -> tuple[str, str, str | None, b
         f"{prefix}/session-{label}.inference.json",
         mutation if label == "A" else None,
         label == "A",
+        f"{series_id}-{work.condition}",
     )
+
+
+def _session_prefix_and_series(control: ExecutionControl, work: SessionWork) -> tuple[str, str]:
+    if work.scenario in _SINGLE_SESSION_SCENARIOS:
+        return work.condition, control.run_id
+    parts = PurePosixPath(work.trace_path).parts
+    if len(parts) == 2 and parts[0] == work.condition:
+        return work.condition, control.run_id
+    matrix = control.spec.experiment.mode == ExperimentMode.MATRIX
+    if matrix and len(parts) == 4 and parts[0] == "trials" and parts[2] == work.condition:
+        series_id = _matrix_series_id(parts[1])
+        prefix = PurePosixPath(parts[0], series_id, parts[2]).as_posix()
+        return prefix, series_id
+    raise ExecutionInterruptedError("session artifacts differ from installed work")
+
+
+def _matrix_series_id(raw: str) -> str:
+    value = _text(raw, "matrix trial series ID")
+    if ":" in value:
+        raise ExecutionInterruptedError("matrix trial series ID contains unsupported characters")
+    return value
 
 
 def _pending_work(events: list[dict[str, Any]]) -> dict[str, Any] | None:
