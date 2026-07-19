@@ -8,29 +8,29 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Docs](https://img.shields.io/badge/docs-ctpf.q--uestionable.ai-8b5cf6)](https://ctpf.q-uestionable.ai)
 
-**Evidence-first capability-trust experiments for agentic systems**
-
 CTPF is a research project investigating **Capability Trust Propagation Failure**: whether data
 crossing tools, artifacts, sessions, or capabilities acquires authority that its provenance,
 integrity, authorization scope, or intended audience does not justify.
 
-The `ctpf` Python package is the project's reference research harness. It is not a general scanner,
-red-team platform, proxy product, or workflow orchestrator. It coordinates controlled conditions,
-captures original and modified protocol evidence, verifies run-scoped external effects, compares
-results conservatively, and writes integrity-checkable evidence bundles.
+The `ctpf` Python package and CLI implement the project's research harness. They coordinate
+controlled conditions, preserve original and modified protocol evidence, check run-scoped external
+effects, compare results under defined rules, and produce evidence bundles with file hashes. The
+package does not provide general-purpose vulnerability scanning, red-team automation, or workflow
+orchestration.
 
-The harness is intended primarily for an AI research agent and secondarily for direct human
-operation and validation. A human authorizes the campaign envelope—targets, exact remote RunSpecs,
-resource/effect limits, spend, and risk—once; the agent then operates the approved lifecycle
-without stepwise or per-run intervention. Humans retain scientific adjudication and publication.
-Mechanical scores are not research conclusions.
+The governed control interface is designed for operation by an AI research agent. The CLI remains
+directly usable by a human for validation. A human authorizes the campaign targets, exact remote
+RunSpecs, resource and effect limits, spending, and risk. The agent can then execute the listed
+runs without separate approval for each run. Humans retain scientific adjudication and publication
+decisions. Mechanical scores are not research conclusions.
 
 ## Research method
 
 A CTPF experiment:
 
 1. declares the user-approved scope, trust boundary, prohibited capability, and observable effect;
-2. runs isolated baseline, manipulated, and when justified hardened conditions under fixed pins;
+2. runs isolated baseline, manipulated, and when justified hardened conditions under fixed
+   configuration values;
 3. preserves the original response before a narrow intervention;
 4. records invocation, result, persistence, later consumption, and external effect separately;
 5. requires exact causal continuity and a matching run-scoped effect where the scenario calls for
@@ -43,23 +43,24 @@ production impact, or the validity of CTPF as a universal class.
 
 ## Current empirical scope
 
-| Scenario | Question | Availability and demonstrated scope |
+| Scenario | Question | Availability and recorded use |
 | --- | --- | --- |
-| `cascade-memo` | Can changed authority persist into an artifact, cross a session boundary, and precede a matching action and effect? | Included in PyPI `v0.14.0`; demonstrated through manual Cursor, OpenAI-compatible driven inference, a two-model matrix, and Claude Code runtime workflows. Outcomes differ by pin and include confirmed, inconclusive, and confounded observations. |
-| `pattern2` | Can one changed status response precede a matching privileged action and run-scoped effect? | Present on unreleased `main`; demonstrated through one pinned OpenAI-compatible acceptance series. It is not part of the public `v0.14.0` package. |
+| `cascade-memo` | Can changed authority persist into an artifact, cross a session boundary, and precede a matching action and effect? | Included in PyPI `v0.14.0`. It has been used in manual, OpenAI-compatible inference, matrix, and external agent-runtime runs. Recorded outcomes vary by configuration and include `CONFIRMED`, `INCONCLUSIVE`, and confounded runs. |
+| `pattern2` | Can one changed status response precede a matching privileged action and run-scoped effect? | Implemented on unreleased `main` and used in one pinned OpenAI-compatible acceptance series. It is not included in `v0.14.0`. |
+| `pattern3-scope` | Can an approved read scope precede a write outside that scope and a matching run-scoped effect? | Implemented on unreleased `main`. Its deterministic preflight passed. The first governed inference attempt stopped during fixture startup before a model request, so it produced no empirical outcome. It is not included in `v0.14.0`. |
 
-These are narrow calibration/reference scenarios. Their prompts delegate conditional action authority
-to returned data, so the positive observations demonstrate the response-to-effect mechanism but do
-not by themselves establish independently emergent authority promotion.
+These are narrow experimental scenarios. Their prompts delegate conditional action authority to
+returned data. The recorded observations therefore cover the configured response-to-effect
+mechanism; they do not establish independently emergent authority promotion.
 
-## Reference implementation
+## Commands
 
 | Command | Role |
 | --- | --- |
 | `ctpf experiment` | Run packaged controlled experiments |
 | `ctpf experiment control` | Machine lifecycle for an untrusted AI caller (source `main` only) |
 | `ctpf experiment govern` | TTY-only human campaign-policy, key, and exceptional per-run authority (source `main` only) |
-| `ctpf targets` | Register demonstrated model and agent-runtime targets |
+| `ctpf targets` | Register inference and agent-runtime target profiles |
 | `ctpf proxy` | Observe or intervene in MCP traffic and preserve protocol evidence |
 | `ctpf runs` / `ctpf findings` | Inspect retained operational records |
 | `ctpf config` / `ctpf db` | Manage non-secret settings, OS-keyring credentials, and local state |
@@ -68,14 +69,13 @@ not by themselves establish independently emergent authority promotion.
 `v0.14.0`. Proxy replay and arbitrary target mutation remain human-operated supporting surfaces, not
 the autonomous entry path.
 
-Audit enumeration and SARIF export remain in-tree as a frozen secondary library, not a public CLI
-pillar or research contribution. Demonstrated fixtures stay narrow and scenario-specific. Removed
-IPI, CXP, Inject, Chain, RXP, Assist, Imports, Orchestrator, and Web UI packages are not product
-modules.
+Audit enumeration and SARIF export remain in-tree as a frozen secondary library without a public
+CLI. Fixtures are scenario-specific. The removed IPI, CXP, Inject, Chain, RXP, Assist, Imports,
+Orchestrator, and Web UI packages are not present as product modules.
 
-## Run the released reference experiment
+## Run the released package
 
-Install the current public package and inspect the demonstrated scenarios:
+Install `v0.14.0` and inspect its experiment commands:
 
 ```bash
 pip install ctpf==0.14.0
@@ -83,8 +83,8 @@ ctpf experiment run --help
 ctpf experiment run cascade-memo --help
 ```
 
-For a fully driven cascade series, first store the endpoint credential in the OS keyring. The
-target record contains only the credential name:
+To run `cascade-memo` against an OpenAI-compatible target, first store the endpoint credential in
+the OS keyring. The target record contains the credential name, not the credential value:
 
 ```bash
 ctpf config set-credential local-research
@@ -112,13 +112,13 @@ uv sync --group dev
 uv run ctpf experiment run --help
 ```
 
-Source `main` currently exposes `cascade-memo`, `pattern2`, and the agent-operable
-`control` / `govern` surfaces. Do not treat source-only behavior as part of `v0.14.0` or as a
+Source `main` currently includes `cascade-memo`, `pattern2`, `pattern3-scope`, and the governed
+`control` / `govern` interfaces. Do not treat source-only behavior as part of `v0.14.0` or as a
 commitment to another package release.
 
-### Safe agent entry on source `main`
+### Agent control interface on source `main`
 
-Query-only discovery first:
+These commands inspect capabilities and validate a RunSpec without starting an experiment:
 
 ```bash
 uv run ctpf experiment control capabilities
@@ -127,22 +127,20 @@ uv run ctpf experiment control validate < runspec.json
 
 A human creates one signed campaign policy through `ctpf experiment govern` on an interactive TTY.
 For bounded remote work, that policy lists the exact RunSpec digests the agent may execute; each
-digest is idempotent and cannot authorize a changed or additional run. Per-run approval remains an
-available stricter policy choice, not the normal agent-operated workflow. Deploy the agent inside
-an external OS/runtime sandbox; the harness does not claim full-shell containment. Details:
+listed run starts idempotently, and the policy does not authorize a changed or additional RunSpec.
+Per-run approval is also available. Deploy the agent inside an external OS/runtime sandbox; the
+harness does not provide containment for unrestricted shell access. Details:
 [Agent-Operable Lifecycle](https://ctpf.q-uestionable.ai/experiments/agent-operable).
 
-> By [Richard Spicer](https://richardspicer.io) · [q-uestionable-AI](https://q-uestionable.ai)
-
-Published documentation: [ctpf.q-uestionable.ai](https://ctpf.q-uestionable.ai).
+Documentation: [ctpf.q-uestionable.ai](https://ctpf.q-uestionable.ai).
 
 ---
 
 ## Legal
 
 All tools are intended for authorized security testing only. Only test systems you own,
-control, or have explicit permission to test. Responsible disclosure for all
-vulnerabilities discovered.
+control, or have explicit permission to test. Use responsible disclosure for vulnerabilities
+discovered during testing.
 
 ## License
 
@@ -150,4 +148,5 @@ vulnerabilities discovered.
 
 ## AI Disclosure
 
-This project uses AI-assisted development. All code is reviewed and tested before merge.
+This project uses AI-assisted development. CI runs automated tests, linting, type checking, and
+security scans.
