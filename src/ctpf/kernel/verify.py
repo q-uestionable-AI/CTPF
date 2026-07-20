@@ -9,9 +9,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ctpf.kernel.slice import (
+    ARTIFACTS_DIRNAME,
     BUNDLE_SCHEMA_CURRENT,
     BUNDLE_SCHEMA_LEGACY,
     MANIFEST_NAME,
+    MANIPULATED_SINK_NAME,
+    REQUIRED_CASCADE_SPLIT_TRACE_NAMES,
+    REQUIRED_CONFIRMED_CASCADE_ARTIFACTS,
+    REQUIRED_TRACE_NAMES,
     RESULT_NAME,
     PromotionReason,
     PromotionResult,
@@ -20,6 +25,10 @@ from ctpf.kernel.slice import (
 
 _HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
+_PATTERN3_CONDITIONS = ("baseline", "opportunity", "hardened_opportunity")
+_PATTERN3_REQUIRED_NAMES = ("authority.json", "observation.json", "session.json")
+_PATTERN3_CONFIRMED_SINK = "opportunity/sink.json"
+_ARTIFACT_REF_KEYS = frozenset({"authority_artifact", "memo_path", "sink_path"})
 
 
 class VerificationStatus(StrEnum):
@@ -109,6 +118,8 @@ def verify_evidence_bundle(bundle_dir: Path | str) -> VerificationResult:
         return _failed(schema_version, legacy, *failures, warnings=warnings)
 
     failures.extend(_validate_hash_map(root, hashes))
+    if schema_version == BUNDLE_SCHEMA_CURRENT:
+        failures.extend(_validate_required_artifacts(manifest, transition, hashes))
     failures.extend(_validate_result_agreement(manifest, transition, legacy))
     if legacy and "promotion_reason" not in transition:
         warnings.append(
@@ -179,6 +190,137 @@ def _validate_hash_map(root: Path, hashes: dict[str, Any]) -> list[VerificationI
         if issue is not None:
             failures.append(issue)
     return failures
+
+
+def _validate_required_artifacts(
+    manifest: dict[str, Any],
+    transition: dict[str, Any],
+    hashes: dict[str, Any],
+) -> list[VerificationIssue]:
+    """Validate current-schema required artifacts are declared in the hash map."""
+    declared = {name for name in hashes if isinstance(name, str)}
+    scenario_required = _scenario_required_artifacts(manifest)
+    if isinstance(scenario_required, VerificationIssue):
+        return [scenario_required]
+    required = {RESULT_NAME}
+    required.update(scenario_required)
+    required.update(_artifact_refs(manifest))
+    required.update(_artifact_refs(transition))
+    return _missing_artifact_failures(required, declared)
+
+
+def _scenario_required_artifacts(manifest: dict[str, Any]) -> set[str] | VerificationIssue:
+    """Return required bundle-relative artifact paths for a current manifest."""
+    scenario_id = _scenario_id(manifest)
+    if _is_pattern3_manifest(manifest):
+        return _pattern3_required_artifacts(manifest)
+    if scenario_id == "cascade_memo":
+        return _cascade_required_artifacts(manifest)
+    if scenario_id == "pattern2":
+        return _pattern2_required_artifacts(manifest)
+    return VerificationIssue(
+        "manifest_invalid",
+        "current bundle has an unsupported or unidentifiable scenario",
+    )
+
+
+def _pattern2_required_artifacts(manifest: dict[str, Any]) -> set[str]:
+    """Return Pattern 2 artifact declarations required by the bundle writer."""
+    required = _artifact_paths(REQUIRED_TRACE_NAMES)
+    if manifest.get("promotion_result") == PromotionResult.CONFIRMED.value:
+        required.add(_artifact_path(MANIPULATED_SINK_NAME))
+    return required
+
+
+def _cascade_required_artifacts(manifest: dict[str, Any]) -> set[str]:
+    """Return cascade artifact declarations required by the bundle writer."""
+    declared = _declared_artifact_paths(manifest)
+    if _artifact_paths(REQUIRED_TRACE_NAMES).issubset(declared):
+        required = _artifact_paths(REQUIRED_TRACE_NAMES)
+    else:
+        required = _artifact_paths(REQUIRED_CASCADE_SPLIT_TRACE_NAMES)
+    if manifest.get("promotion_result") == PromotionResult.CONFIRMED.value:
+        required.update(_artifact_paths(REQUIRED_CONFIRMED_CASCADE_ARTIFACTS))
+    return required
+
+
+def _pattern3_required_artifacts(manifest: dict[str, Any]) -> set[str]:
+    """Return Pattern 3 artifact declarations required by the bundle writer."""
+    required = {
+        _artifact_path(f"{condition}/{name}")
+        for condition in _PATTERN3_CONDITIONS
+        for name in _PATTERN3_REQUIRED_NAMES
+    }
+    if manifest.get("promotion_result") == PromotionResult.CONFIRMED.value:
+        required.add(_artifact_path(_PATTERN3_CONFIRMED_SINK))
+    return required
+
+
+def _artifact_refs(value: Any) -> set[str]:
+    """Return artifact refs from known reference-bearing fields."""
+    refs: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in _ARTIFACT_REF_KEYS and isinstance(item, str):
+                refs.update(_artifact_ref(item))
+            refs.update(_artifact_refs(item))
+    elif isinstance(value, list):
+        for item in value:
+            refs.update(_artifact_refs(item))
+    return refs
+
+
+def _artifact_ref(value: str) -> set[str]:
+    """Return a singleton artifact ref when the string is bundle-relative."""
+    if value.startswith(f"{ARTIFACTS_DIRNAME}/"):
+        return {value}
+    return set()
+
+
+def _missing_artifact_failures(
+    required: set[str],
+    declared: set[str],
+) -> list[VerificationIssue]:
+    """Build missing-artifact failures for required undeclared paths."""
+    return [
+        VerificationIssue("artifact_missing", f"required artifact is not declared: {name}")
+        for name in sorted(required.difference(declared))
+    ]
+
+
+def _declared_artifact_paths(manifest: dict[str, Any]) -> set[str]:
+    """Return string artifact paths declared by the manifest hash map."""
+    hashes = manifest.get("artifact_hashes")
+    if not isinstance(hashes, dict):
+        return set()
+    return {name for name in hashes if isinstance(name, str)}
+
+
+def _artifact_paths(names: frozenset[str]) -> set[str]:
+    """Prefix logical artifact names with the bundle artifact directory."""
+    return {_artifact_path(name) for name in names}
+
+
+def _artifact_path(name: str) -> str:
+    """Return a bundle-relative artifact path for a logical artifact name."""
+    return f"{ARTIFACTS_DIRNAME}/{name}"
+
+
+def _is_pattern3_manifest(manifest: dict[str, Any]) -> bool:
+    """Return whether a current manifest has the Pattern 3 condition shape."""
+    conditions = manifest.get("conditions")
+    if not isinstance(conditions, dict):
+        return False
+    return set(_PATTERN3_CONDITIONS).issubset(conditions)
+
+
+def _scenario_id(manifest: dict[str, Any]) -> str | None:
+    """Return a manifest scenario_id when present."""
+    scenario = manifest.get("scenario")
+    if not isinstance(scenario, dict):
+        return None
+    value = scenario.get("scenario_id")
+    return value if isinstance(value, str) else None
 
 
 def _validate_one_artifact(
