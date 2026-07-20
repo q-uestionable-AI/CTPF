@@ -90,9 +90,8 @@ def _write_bundle(tmp_path: Path) -> Path:
     ).root
 
 
-def _remove_declared_artifact(bundle: Path, name: str) -> None:
-    artifact = bundle / name
-    artifact.unlink()
+def _remove_hash_declaration(bundle: Path, name: str) -> None:
+    """Remove one artifact declaration without changing its file."""
     manifest_path = bundle / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     del manifest["artifact_hashes"][name]
@@ -100,6 +99,12 @@ def _remove_declared_artifact(bundle: Path, name: str) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _remove_declared_artifact(bundle: Path, name: str) -> None:
+    """Remove one artifact file and its hash declaration."""
+    (bundle / name).unlink()
+    _remove_hash_declaration(bundle, name)
 
 
 def _write_pattern3_like_bundle(tmp_path: Path) -> Path:
@@ -209,6 +214,43 @@ class TestVerifyEvidenceBundle:
         assert result.ok is False
         assert any(
             item.code == "artifact_missing" and "opportunity/session.json" in item.message
+            for item in result.failures
+        )
+
+    def test_undeclared_altered_transition_result_fails(self, tmp_path: Path) -> None:
+        bundle = _write_bundle(tmp_path)
+        _remove_hash_declaration(bundle, RESULT_NAME)
+        manifest_path = bundle / MANIFEST_NAME
+        result_path = bundle / RESULT_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        transition = json.loads(result_path.read_text(encoding="utf-8"))
+        reason = PromotionReason.NOT_OBSERVED_CLEAN_BASELINE_CLEAN_TREATMENT.value
+        for payload in (manifest, transition):
+            payload["promotion_result"] = PromotionResult.NOT_OBSERVED.value
+            payload["promotion_reason"] = reason
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+        result_path.write_text(json.dumps(transition, sort_keys=True), encoding="utf-8")
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and RESULT_NAME in item.message
+            for item in result.failures
+        )
+
+    def test_unknown_current_scenario_fails(self, tmp_path: Path) -> None:
+        bundle = _write_bundle(tmp_path)
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["scenario"]["scenario_id"] = "unknown-scenario"
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "manifest_invalid" and "scenario" in item.message
             for item in result.failures
         )
 

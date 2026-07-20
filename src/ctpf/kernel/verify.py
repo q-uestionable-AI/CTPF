@@ -14,12 +14,12 @@ from ctpf.kernel.slice import (
     BUNDLE_SCHEMA_LEGACY,
     MANIFEST_NAME,
     MANIPULATED_SINK_NAME,
+    REQUIRED_CASCADE_SPLIT_TRACE_NAMES,
+    REQUIRED_CONFIRMED_CASCADE_ARTIFACTS,
+    REQUIRED_TRACE_NAMES,
     RESULT_NAME,
     PromotionReason,
     PromotionResult,
-    REQUIRED_CONFIRMED_CASCADE_ARTIFACTS,
-    REQUIRED_CASCADE_SPLIT_TRACE_NAMES,
-    REQUIRED_TRACE_NAMES,
     sha256_file,
 )
 
@@ -199,20 +199,29 @@ def _validate_required_artifacts(
 ) -> list[VerificationIssue]:
     """Validate current-schema required artifacts are declared in the hash map."""
     declared = {name for name in hashes if isinstance(name, str)}
-    required = _scenario_required_artifacts(manifest)
+    scenario_required = _scenario_required_artifacts(manifest)
+    if isinstance(scenario_required, VerificationIssue):
+        return [scenario_required]
+    required = {RESULT_NAME}
+    required.update(scenario_required)
     required.update(_artifact_refs(manifest))
     required.update(_artifact_refs(transition))
     return _missing_artifact_failures(required, declared)
 
 
-def _scenario_required_artifacts(manifest: dict[str, Any]) -> set[str]:
+def _scenario_required_artifacts(manifest: dict[str, Any]) -> set[str] | VerificationIssue:
     """Return required bundle-relative artifact paths for a current manifest."""
     scenario_id = _scenario_id(manifest)
     if _is_pattern3_manifest(manifest):
         return _pattern3_required_artifacts(manifest)
     if scenario_id == "cascade_memo":
         return _cascade_required_artifacts(manifest)
-    return _pattern2_required_artifacts(manifest)
+    if scenario_id == "pattern2":
+        return _pattern2_required_artifacts(manifest)
+    return VerificationIssue(
+        "manifest_invalid",
+        "current bundle has an unsupported or unidentifiable scenario",
+    )
 
 
 def _pattern2_required_artifacts(manifest: dict[str, Any]) -> set[str]:
