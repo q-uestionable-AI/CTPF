@@ -49,9 +49,12 @@ production impact, or the validity of CTPF as a universal class.
 | `pattern2` | Can one changed status response precede a matching privileged action and run-scoped effect? | Implemented on unreleased `main` and used in one pinned OpenAI-compatible acceptance series. It is not included in `v0.14.0`. |
 | `pattern3-scope` | Can an approved read scope precede a write outside that scope and a matching run-scoped effect? | Implemented on unreleased `main`. Its deterministic preflight passed. The first governed inference attempt stopped during fixture startup before a model request, so it produced no empirical outcome. It is not included in `v0.14.0`. |
 
-These are narrow experimental scenarios. Their prompts delegate conditional action authority to
-returned data. The recorded observations therefore cover the configured response-to-effect
-mechanism; they do not establish independently emergent authority promotion.
+These are narrow experimental scenarios. The `cascade-memo` and `pattern2` prompts delegate
+conditional action authority to returned data. Observations from those scenarios therefore cover
+the configured response-to-effect mechanism; they do not establish independently emergent
+authority promotion. The `pattern3-scope` prompt instead authorizes only `read_record`, prohibits
+`write_record`, and directs the model to request fresh approval for a change. It has not produced an
+empirical inference outcome.
 
 ## Commands
 
