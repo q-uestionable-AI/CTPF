@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from ctpf.kernel import (
+    ARTIFACTS_DIRNAME,
     BASELINE_TRACE_NAME,
     BUNDLE_SCHEMA_CURRENT,
     CONDITION_BASELINE,
@@ -22,6 +23,7 @@ from ctpf.kernel import (
     PromotionResult,
     RunObservation,
     compare_baseline_manipulated,
+    sha256_file,
     verify_evidence_bundle,
     write_evidence_bundle,
 )
@@ -88,6 +90,78 @@ def _write_bundle(tmp_path: Path) -> Path:
     ).root
 
 
+def _remove_declared_artifact(bundle: Path, name: str) -> None:
+    artifact = bundle / name
+    artifact.unlink()
+    manifest_path = bundle / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["artifact_hashes"][name]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pattern3_like_bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "pattern3-bundle"
+    artifacts = bundle / ARTIFACTS_DIRNAME
+    artifacts.mkdir(parents=True)
+    transition = {
+        "promotion_reason": PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT.value,
+        "promotion_result": PromotionResult.CONFIRMED.value,
+    }
+    result_path = bundle / RESULT_NAME
+    result_path.write_text(
+        json.dumps(transition, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    hashes = {RESULT_NAME: sha256_file(result_path)}
+    for condition in ("baseline", "opportunity", "hardened_opportunity"):
+        for name in ("authority.json", "observation.json", "session.json"):
+            path = artifacts / condition / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"condition": condition, "artifact": name}) + "\n",
+                encoding="utf-8",
+            )
+            hashes[f"{ARTIFACTS_DIRNAME}/{condition}/{name}"] = sha256_file(path)
+    sink_path = artifacts / "opportunity" / "sink.json"
+    sink_path.write_text('{"effect":"applied"}\n', encoding="utf-8")
+    hashes[f"{ARTIFACTS_DIRNAME}/opportunity/sink.json"] = sha256_file(sink_path)
+    manifest_path = bundle / MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(_pattern3_manifest(hashes), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return bundle
+
+
+def _pattern3_manifest(hashes: dict[str, str]) -> dict[str, object]:
+    conditions = {
+        condition: {
+            "authority_artifact": f"{ARTIFACTS_DIRNAME}/{condition}/authority.json",
+            "condition": condition,
+            "external_effect": {
+                "present": condition == "opportunity",
+                "sink_path": (
+                    f"{ARTIFACTS_DIRNAME}/opportunity/sink.json"
+                    if condition == "opportunity"
+                    else None
+                ),
+            },
+        }
+        for condition in ("baseline", "opportunity", "hardened_opportunity")
+    }
+    return {
+        "artifact_hashes": hashes,
+        "conditions": conditions,
+        "promotion_reason": PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT.value,
+        "promotion_result": PromotionResult.CONFIRMED.value,
+        "scenario": {"series_id": "pattern3-deterministic-preflight"},
+        "schema_version": BUNDLE_SCHEMA_CURRENT,
+    }
+
+
 class TestVerifyEvidenceBundle:
     def test_current_bundle_passes(self, tmp_path: Path) -> None:
         bundle = _write_bundle(tmp_path)
@@ -118,6 +192,26 @@ class TestVerifyEvidenceBundle:
         assert result.ok is False
         assert any(item.code == "artifact_path_invalid" for item in result.failures)
 
+    def test_undeclared_required_pattern2_trace_fails(self, tmp_path: Path) -> None:
+        bundle = _write_bundle(tmp_path)
+        _remove_declared_artifact(bundle, f"{ARTIFACTS_DIRNAME}/{MANIPULATED_TRACE_NAME}")
+        result = verify_evidence_bundle(bundle)
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and MANIPULATED_TRACE_NAME in item.message
+            for item in result.failures
+        )
+
+    def test_undeclared_required_pattern3_session_fails(self, tmp_path: Path) -> None:
+        bundle = _write_pattern3_like_bundle(tmp_path)
+        _remove_declared_artifact(bundle, f"{ARTIFACTS_DIRNAME}/opportunity/session.json")
+        result = verify_evidence_bundle(bundle)
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and "opportunity/session.json" in item.message
+            for item in result.failures
+        )
+
     def test_legacy_bundle_without_reason_warns(self, tmp_path: Path) -> None:
         bundle = _write_bundle(tmp_path)
         manifest_path = bundle / MANIFEST_NAME
@@ -135,8 +229,6 @@ class TestVerifyEvidenceBundle:
             encoding="utf-8",
         )
         # Re-hash trust_transition after mutation so hash checks pass.
-        from ctpf.kernel import sha256_file
-
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["artifact_hashes"][RESULT_NAME] = sha256_file(result_path)
         manifest_path.write_text(
