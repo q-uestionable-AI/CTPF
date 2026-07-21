@@ -989,17 +989,18 @@ def _prepare_cascade_artifacts(
 ) -> list[tuple[str, Path]]:
     """Validate cascade bundle destination and required artifact names.
 
-    Session traces are always required. Memo/sink effect files are required
-    only for ``CONFIRMED`` results (clean/partial runs may only have traces).
+    Split session traces are always required. Memo/sink effect files are
+    required only for ``CONFIRMED`` results (clean/partial runs may only have
+    traces).
     """
     if output_dir.exists():
         raise FileExistsError(f"evidence bundle destination already exists: {output_dir}")
     if not artifacts:
         raise ValueError("evidence bundle requires raw artifacts")
-    has_legacy_traces = REQUIRED_TRACE_NAMES.issubset(artifacts)
-    has_split_traces = REQUIRED_CASCADE_SPLIT_TRACE_NAMES.issubset(artifacts)
-    if not has_legacy_traces and not has_split_traces:
-        raise ValueError("cascade bundle requires legacy combined traces or four split traces")
+    missing_traces = REQUIRED_CASCADE_SPLIT_TRACE_NAMES.difference(artifacts)
+    if missing_traces:
+        missing = ", ".join(sorted(missing_traces))
+        raise ValueError(f"cascade bundle missing required split traces: {missing}")
     if result.promotion_result == PromotionResult.CONFIRMED:
         missing_confirmed = REQUIRED_CONFIRMED_CASCADE_ARTIFACTS.difference(artifacts)
         if missing_confirmed:
