@@ -7,11 +7,16 @@ from pathlib import Path
 
 from ctpf.kernel import (
     ARTIFACTS_DIRNAME,
+    BASELINE_SESSION_A_TRACE_NAME,
+    BASELINE_SESSION_B_TRACE_NAME,
     BASELINE_TRACE_NAME,
     BUNDLE_SCHEMA_CURRENT,
     CONDITION_BASELINE,
     CONDITION_MANIPULATED,
     MANIFEST_NAME,
+    MANIPULATED_MEMO_NAME,
+    MANIPULATED_SESSION_A_TRACE_NAME,
+    MANIPULATED_SESSION_B_TRACE_NAME,
     MANIPULATED_SINK_NAME,
     MANIPULATED_TRACE_NAME,
     RESULT_NAME,
@@ -105,6 +110,52 @@ def _remove_declared_artifact(bundle: Path, name: str) -> None:
     """Remove one artifact file and its hash declaration."""
     (bundle / name).unlink()
     _remove_hash_declaration(bundle, name)
+
+
+def _write_hashed_artifact(
+    bundle: Path,
+    hashes: dict[str, str],
+    name: str,
+    payload: object,
+) -> None:
+    """Write one artifact and add its bundle-relative digest."""
+    path = bundle / ARTIFACTS_DIRNAME / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    hashes[f"{ARTIFACTS_DIRNAME}/{name}"] = sha256_file(path)
+
+
+def _write_split_cascade_bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "cascade-bundle"
+    bundle.mkdir()
+    transition = {
+        "promotion_reason": PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT.value,
+        "promotion_result": PromotionResult.CONFIRMED.value,
+    }
+    result_path = bundle / RESULT_NAME
+    result_path.write_text(json.dumps(transition, sort_keys=True) + "\n", encoding="utf-8")
+    hashes = {RESULT_NAME: sha256_file(result_path)}
+    for name in (
+        BASELINE_SESSION_A_TRACE_NAME,
+        BASELINE_SESSION_B_TRACE_NAME,
+        MANIPULATED_SESSION_A_TRACE_NAME,
+        MANIPULATED_SESSION_B_TRACE_NAME,
+        MANIPULATED_MEMO_NAME,
+        MANIPULATED_SINK_NAME,
+    ):
+        _write_hashed_artifact(bundle, hashes, name, {"artifact": name})
+    manifest = {
+        "artifact_hashes": hashes,
+        "promotion_reason": transition["promotion_reason"],
+        "promotion_result": transition["promotion_result"],
+        "scenario": {"scenario_id": "cascade_memo"},
+        "schema_version": BUNDLE_SCHEMA_CURRENT,
+    }
+    (bundle / MANIFEST_NAME).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return bundle
 
 
 def _write_pattern3_like_bundle(tmp_path: Path) -> Path:
@@ -214,6 +265,39 @@ class TestVerifyEvidenceBundle:
         assert result.ok is False
         assert any(
             item.code == "artifact_missing" and "opportunity/session.json" in item.message
+            for item in result.failures
+        )
+
+    def test_cascade_legacy_trace_injection_does_not_hide_missing_split_traces(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        bundle = _write_split_cascade_bundle(tmp_path)
+        verified = verify_evidence_bundle(bundle)
+        assert verified.ok
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        hashes = manifest["artifact_hashes"]
+        _write_hashed_artifact(bundle, hashes, BASELINE_TRACE_NAME, {"legacy": "baseline"})
+        _write_hashed_artifact(bundle, hashes, MANIPULATED_TRACE_NAME, {"legacy": "manipulated"})
+        for name in (
+            BASELINE_SESSION_A_TRACE_NAME,
+            BASELINE_SESSION_B_TRACE_NAME,
+            MANIPULATED_SESSION_A_TRACE_NAME,
+            MANIPULATED_SESSION_B_TRACE_NAME,
+        ):
+            (bundle / ARTIFACTS_DIRNAME / name).unlink()
+            del hashes[f"{ARTIFACTS_DIRNAME}/{name}"]
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and "session-A.json" in item.message
             for item in result.failures
         )
 

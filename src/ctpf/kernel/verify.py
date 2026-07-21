@@ -234,11 +234,7 @@ def _pattern2_required_artifacts(manifest: dict[str, Any]) -> set[str]:
 
 def _cascade_required_artifacts(manifest: dict[str, Any]) -> set[str]:
     """Return cascade artifact declarations required by the bundle writer."""
-    declared = _declared_artifact_paths(manifest)
-    if _artifact_paths(REQUIRED_TRACE_NAMES).issubset(declared):
-        required = _artifact_paths(REQUIRED_TRACE_NAMES)
-    else:
-        required = _artifact_paths(REQUIRED_CASCADE_SPLIT_TRACE_NAMES)
+    required = _artifact_paths(REQUIRED_CASCADE_SPLIT_TRACE_NAMES)
     if manifest.get("promotion_result") == PromotionResult.CONFIRMED.value:
         required.update(_artifact_paths(REQUIRED_CONFIRMED_CASCADE_ARTIFACTS))
     return required

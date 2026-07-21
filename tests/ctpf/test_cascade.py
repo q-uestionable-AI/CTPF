@@ -8,10 +8,14 @@ from pathlib import Path
 import pytest
 
 from ctpf.kernel import (
+    BASELINE_SESSION_A_TRACE_NAME,
+    BASELINE_SESSION_B_TRACE_NAME,
     BASELINE_TRACE_NAME,
     CONDITION_BASELINE,
     CONDITION_MANIPULATED,
     MANIPULATED_MEMO_NAME,
+    MANIPULATED_SESSION_A_TRACE_NAME,
+    MANIPULATED_SESSION_B_TRACE_NAME,
     MANIPULATED_SINK_NAME,
     MANIPULATED_TRACE_NAME,
     CascadeArmObservation,
@@ -359,10 +363,24 @@ def _session_trace_files(tmp_path: Path) -> tuple[Path, Path]:
     return baseline_session, manip_session
 
 
+def _split_session_trace_files(tmp_path: Path) -> dict[str, Path]:
+    inputs = tmp_path / "inputs"
+    traces = {
+        BASELINE_SESSION_A_TRACE_NAME: inputs / BASELINE_SESSION_A_TRACE_NAME,
+        BASELINE_SESSION_B_TRACE_NAME: inputs / BASELINE_SESSION_B_TRACE_NAME,
+        MANIPULATED_SESSION_A_TRACE_NAME: inputs / MANIPULATED_SESSION_A_TRACE_NAME,
+        MANIPULATED_SESSION_B_TRACE_NAME: inputs / MANIPULATED_SESSION_B_TRACE_NAME,
+    }
+    for name, path in traces.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"trace": name}) + "\n", encoding="utf-8")
+    return traces
+
+
 class TestCascadeEvidenceBundle:
     def test_writes_hashes_and_manifest(self, tmp_path: Path) -> None:
         baseline = _clean_arm()
-        baseline_session, manip_session = _session_trace_files(tmp_path)
+        traces = _split_session_trace_files(tmp_path)
         memo = tmp_path / "inputs" / "manipulated" / "memo.json"
         sink = tmp_path / "inputs" / "manipulated" / "sink.json"
         memo.write_text(
@@ -412,8 +430,7 @@ class TestCascadeEvidenceBundle:
             result=transition,
             experiment=experiment,
             artifacts={
-                BASELINE_TRACE_NAME: baseline_session,
-                MANIPULATED_TRACE_NAME: manip_session,
+                **traces,
                 MANIPULATED_MEMO_NAME: memo,
                 MANIPULATED_SINK_NAME: sink,
             },
@@ -457,7 +474,7 @@ class TestCascadeEvidenceBundle:
         )
         transition = compare_cascade_baseline_manipulated(baseline, manipulated)
         assert transition.promotion_result == PromotionResult.NOT_OBSERVED
-        baseline_session, manip_session = _session_trace_files(tmp_path)
+        traces = _split_session_trace_files(tmp_path)
         experiment = CascadeExperimentContext(
             baseline=baseline,
             manipulated=manipulated,
@@ -468,10 +485,7 @@ class TestCascadeEvidenceBundle:
             tmp_path / "bundle",
             result=transition,
             experiment=experiment,
-            artifacts={
-                BASELINE_TRACE_NAME: baseline_session,
-                MANIPULATED_TRACE_NAME: manip_session,
-            },
+            artifacts=traces,
         )
         manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
         assert manifest["promotion_result"] == "NOT_OBSERVED"
@@ -482,7 +496,7 @@ class TestCascadeEvidenceBundle:
         baseline = _clean_arm()
         manipulated = _promoted_arm()
         transition = compare_cascade_baseline_manipulated(baseline, manipulated)
-        baseline_session, manip_session = _session_trace_files(tmp_path)
+        traces = _split_session_trace_files(tmp_path)
         experiment = CascadeExperimentContext(
             baseline=baseline,
             manipulated=manipulated,
@@ -490,6 +504,36 @@ class TestCascadeEvidenceBundle:
             scenario=CascadeMemoScenario(),
         )
         with pytest.raises(ValueError, match="confirmed cascade result requires"):
+            write_cascade_evidence_bundle(
+                tmp_path / "bundle",
+                result=transition,
+                experiment=experiment,
+                artifacts=traces,
+            )
+
+    def test_current_schema_requires_split_session_traces(self, tmp_path: Path) -> None:
+        baseline = _clean_arm()
+        manipulated = CascadeArmObservation(
+            condition=CONDITION_MANIPULATED,
+            hop1_persist_invocation=None,
+            hop1_persist_arguments=None,
+            hop1_memo_effect=_effect(present=False, reason="memo_missing"),
+            hop2_memo_read_invocation="read_memo",
+            hop2_memo_read_content=EMPTY_MEMO_READ,
+            hop2_action_invocation=None,
+            hop2_action_arguments=None,
+            hop2_sink_effect=_effect(present=False, reason="sink_missing"),
+        )
+        transition = compare_cascade_baseline_manipulated(baseline, manipulated)
+        baseline_session, manip_session = _session_trace_files(tmp_path)
+        experiment = CascadeExperimentContext(
+            baseline=baseline,
+            manipulated=manipulated,
+            pins=PINS,
+            scenario=CascadeMemoScenario(),
+        )
+
+        with pytest.raises(ValueError, match="missing required split traces"):
             write_cascade_evidence_bundle(
                 tmp_path / "bundle",
                 result=transition,
