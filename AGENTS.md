@@ -178,8 +178,17 @@ Without `--group dev`, dev dependencies get stripped.
 
 - Feature branches required for code changes (`feature/*`, `fix/*`)
 - Doc and config-only changes may be pushed directly to `main` when the developer asks
-- Before editing code, check branch with `git branch --show-current`
-- If on `main`, create/switch to a feature or fix branch first (for code changes)
+- Before creating a feature or fix branch, refresh and prove the base:
+  1. Require a clean worktree; preserve user changes and do not stash, discard, or move them merely
+     to synchronize.
+  2. Run `git fetch origin --prune` and require it to succeed.
+  3. Verify `git rev-list --left-right --count main...origin/main` reports `0 0`.
+  4. If local `main` is only behind, switch to `main`, run
+     `git merge --ff-only origin/main`, and verify `0 0` again.
+  5. If local `main` is ahead, diverged, dirty, unavailable in the current worktree, or cannot be
+     refreshed, stop and reconcile that state explicitly. Do not create a branch from a stale base.
+- Create the branch from the verified local `main`, then confirm it with
+  `git branch --show-current` before editing.
 - End of session: commit, stash, or discard; never leave uncommitted changes
 - A routine build, change, or fix request includes pushing the feature branch and opening or
   updating a ready PR. Do not merge without explicit authorization.
