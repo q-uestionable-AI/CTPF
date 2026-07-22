@@ -25,6 +25,8 @@ from ctpf.kernel.slice import (
 
 _HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
+_SCENARIO_CASCADE_MEMO = "cascade_memo"
+_SCENARIO_PATTERN2 = "pattern2"
 _PATTERN3_CONDITIONS = ("baseline", "opportunity", "hardened_opportunity")
 _PATTERN3_REQUIRED_NAMES = ("authority.json", "observation.json", "session.json")
 _PATTERN3_CONFIRMED_SINK = "opportunity/sink.json"
@@ -212,12 +214,12 @@ def _validate_required_artifacts(
 def _scenario_required_artifacts(manifest: dict[str, Any]) -> set[str] | VerificationIssue:
     """Return required bundle-relative artifact paths for a current manifest."""
     scenario_id = _scenario_id(manifest)
-    if _is_pattern3_manifest(manifest):
-        return _pattern3_required_artifacts(manifest)
-    if scenario_id == "cascade_memo":
+    if scenario_id == _SCENARIO_CASCADE_MEMO:
         return _cascade_required_artifacts(manifest)
-    if scenario_id == "pattern2":
+    if scenario_id == _SCENARIO_PATTERN2:
         return _pattern2_required_artifacts(manifest)
+    if scenario_id is None and _is_pattern3_manifest(manifest):
+        return _pattern3_required_artifacts(manifest)
     return VerificationIssue(
         "manifest_invalid",
         "current bundle has an unsupported or unidentifiable scenario",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from ctpf.kernel import (
     ARTIFACTS_DIRNAME,
@@ -38,6 +39,8 @@ PINS = ExperimentPins(
     model="test-model",
     configuration={"scenario": "pattern2"},
 )
+_PATTERN3_SPOOF_CONDITIONS = ("baseline", "opportunity", "hardened_opportunity")
+_PATTERN3_SPOOF_ARTIFACT_NAMES = ("authority.json", "observation.json", "session.json")
 
 
 def _observation(
@@ -123,6 +126,40 @@ def _write_hashed_artifact(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     hashes[f"{ARTIFACTS_DIRNAME}/{name}"] = sha256_file(path)
+
+
+def _add_pattern3_spoof_shape(bundle: Path, manifest: dict[str, Any]) -> None:
+    """Add enough Pattern 3-shaped data to satisfy the shape-based verifier path."""
+    hashes = manifest["artifact_hashes"]
+    assert isinstance(hashes, dict)
+    for condition in _PATTERN3_SPOOF_CONDITIONS:
+        for name in _PATTERN3_SPOOF_ARTIFACT_NAMES:
+            _write_hashed_artifact(
+                bundle,
+                hashes,
+                f"{condition}/{name}",
+                {"condition": condition, "artifact": name},
+            )
+    _write_hashed_artifact(bundle, hashes, "opportunity/sink.json", {"effect": "applied"})
+    manifest["conditions"] = {
+        condition: {
+            "authority_artifact": f"{ARTIFACTS_DIRNAME}/{condition}/authority.json",
+            "condition": condition,
+        }
+        for condition in _PATTERN3_SPOOF_CONDITIONS
+    }
+
+
+def _remove_artifacts_from_payload(
+    bundle: Path,
+    hashes: dict[str, str],
+    names: tuple[str, ...],
+) -> None:
+    """Remove bundle artifacts and declarations from an in-memory manifest."""
+    for name in names:
+        relative = f"{ARTIFACTS_DIRNAME}/{name}"
+        (bundle / relative).unlink()
+        del hashes[relative]
 
 
 def _write_split_cascade_bundle(tmp_path: Path) -> Path:
@@ -298,6 +335,61 @@ class TestVerifyEvidenceBundle:
         assert result.ok is False
         assert any(
             item.code == "artifact_missing" and "session-A.json" in item.message
+            for item in result.failures
+        )
+
+    def test_cascade_scenario_id_overrides_pattern3_shape(self, tmp_path: Path) -> None:
+        bundle = _write_split_cascade_bundle(tmp_path)
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _add_pattern3_spoof_shape(bundle, manifest)
+        hashes = manifest["artifact_hashes"]
+        _remove_artifacts_from_payload(
+            bundle,
+            hashes,
+            (
+                BASELINE_SESSION_A_TRACE_NAME,
+                BASELINE_SESSION_B_TRACE_NAME,
+                MANIPULATED_SESSION_A_TRACE_NAME,
+                MANIPULATED_SESSION_B_TRACE_NAME,
+                MANIPULATED_MEMO_NAME,
+                MANIPULATED_SINK_NAME,
+            ),
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and "baseline/session-A.json" in item.message
+            for item in result.failures
+        )
+
+    def test_pattern2_scenario_id_overrides_pattern3_shape(self, tmp_path: Path) -> None:
+        bundle = _write_bundle(tmp_path)
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _add_pattern3_spoof_shape(bundle, manifest)
+        hashes = manifest["artifact_hashes"]
+        _remove_artifacts_from_payload(
+            bundle,
+            hashes,
+            (BASELINE_TRACE_NAME, MANIPULATED_TRACE_NAME, MANIPULATED_SINK_NAME),
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "artifact_missing" and "baseline/session.json" in item.message
             for item in result.failures
         )
 
