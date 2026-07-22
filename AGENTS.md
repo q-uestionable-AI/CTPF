@@ -182,10 +182,13 @@ Without `--group dev`, dev dependencies get stripped.
   1. Require a clean worktree; preserve user changes and do not stash, discard, or move them merely
      to synchronize.
   2. Run `git fetch origin --prune` and require it to succeed.
-  3. Verify `git rev-list --left-right --count main...origin/main` reports `0 0`.
-  4. If local `main` is only behind, switch to `main`, run
+  3. Inspect open pull requests targeting `main` in the Git provider. Identify any higher-priority
+     change that should land first and any overlap in files, behavior, or migration sequence. An
+     open pull request is not part of `origin/main`, but it may determine branch ordering.
+  4. Verify `git rev-list --left-right --count main...origin/main` reports `0 0`.
+  5. If local `main` is only behind, switch to `main`, run
      `git merge --ff-only origin/main`, and verify `0 0` again.
-  5. If local `main` is ahead, diverged, dirty, unavailable in the current worktree, or cannot be
+  6. If local `main` is ahead, diverged, dirty, unavailable in the current worktree, or cannot be
      refreshed, stop and reconcile that state explicitly. Do not create a branch from a stale base.
 - Create the branch from the verified local `main`, then confirm it with
   `git branch --show-current` before editing.
