@@ -12,8 +12,10 @@ from ctpf.kernel.slice import (
     ARTIFACTS_DIRNAME,
     BUNDLE_SCHEMA_CURRENT,
     BUNDLE_SCHEMA_LEGACY,
+    CascadeMemoScenario,
     MANIFEST_NAME,
     MANIPULATED_SINK_NAME,
+    Pattern2Scenario,
     REQUIRED_CASCADE_SPLIT_TRACE_NAMES,
     REQUIRED_CONFIRMED_CASCADE_ARTIFACTS,
     REQUIRED_TRACE_NAMES,
@@ -27,9 +29,13 @@ _HASH_LENGTH = 64
 _HEX_DIGITS = frozenset("0123456789abcdef")
 _SCENARIO_CASCADE_MEMO = "cascade_memo"
 _SCENARIO_PATTERN2 = "pattern2"
+_SCENARIO_PATTERN3 = "pattern3_scope"
+_CASCADE_EVENT_SEPARATOR = " \u2192 "
 _PATTERN3_CONDITIONS = ("baseline", "opportunity", "hardened_opportunity")
+_PATTERN3_DESTINATION_CAPABILITY = "write_record"
 _PATTERN3_REQUIRED_NAMES = ("authority.json", "observation.json", "session.json")
 _PATTERN3_CONFIRMED_SINK = "opportunity/sink.json"
+_PATTERN3_SOURCE_EVENT = "read_record tool result"
 _ARTIFACT_REF_KEYS = frozenset({"authority_artifact", "memo_path", "sink_path"})
 
 
@@ -201,7 +207,7 @@ def _validate_required_artifacts(
 ) -> list[VerificationIssue]:
     """Validate current-schema required artifacts are declared in the hash map."""
     declared = {name for name in hashes if isinstance(name, str)}
-    scenario_required = _scenario_required_artifacts(manifest)
+    scenario_required = _scenario_required_artifacts(manifest, transition)
     if isinstance(scenario_required, VerificationIssue):
         return [scenario_required]
     required = {RESULT_NAME}
@@ -211,19 +217,107 @@ def _validate_required_artifacts(
     return _missing_artifact_failures(required, declared)
 
 
-def _scenario_required_artifacts(manifest: dict[str, Any]) -> set[str] | VerificationIssue:
+def _scenario_required_artifacts(
+    manifest: dict[str, Any],
+    transition: dict[str, Any],
+) -> set[str] | VerificationIssue:
     """Return required bundle-relative artifact paths for a current manifest."""
-    scenario_id = _scenario_id(manifest)
+    scenario_id = _scenario_family_from_manifest(manifest)
+    if isinstance(scenario_id, VerificationIssue):
+        return scenario_id
+    scenario_issue = _transition_scenario_issue(scenario_id, manifest, transition)
+    if scenario_issue is not None:
+        return scenario_issue
     if scenario_id == _SCENARIO_CASCADE_MEMO:
         return _cascade_required_artifacts(manifest)
     if scenario_id == _SCENARIO_PATTERN2:
         return _pattern2_required_artifacts(manifest)
+    return _pattern3_required_artifacts(manifest)
+
+
+def _scenario_family_from_manifest(manifest: dict[str, Any]) -> str | VerificationIssue:
+    """Return the manifest-declared scenario family for current bundles."""
+    scenario_id = _scenario_id(manifest)
+    if scenario_id == _SCENARIO_CASCADE_MEMO:
+        return _SCENARIO_CASCADE_MEMO
+    if scenario_id == _SCENARIO_PATTERN2:
+        return _SCENARIO_PATTERN2
     if scenario_id is None and _is_pattern3_manifest(manifest):
-        return _pattern3_required_artifacts(manifest)
+        return _SCENARIO_PATTERN3
     return VerificationIssue(
         "manifest_invalid",
         "current bundle has an unsupported or unidentifiable scenario",
     )
+
+
+def _transition_scenario_issue(
+    scenario_id: str,
+    manifest: dict[str, Any],
+    transition: dict[str, Any],
+) -> VerificationIssue | None:
+    """Return an issue when manifest scenario selection disagrees with hashed transition."""
+    matches = {
+        _SCENARIO_CASCADE_MEMO: _transition_matches_cascade(manifest, transition),
+        _SCENARIO_PATTERN2: _transition_matches_pattern2(manifest, transition),
+        _SCENARIO_PATTERN3: _transition_matches_pattern3(transition),
+    }
+    if matches.get(scenario_id):
+        return None
+    return VerificationIssue(
+        "manifest_invalid",
+        "manifest scenario disagrees with trust_transition",
+    )
+
+
+def _transition_matches_pattern2(
+    manifest: dict[str, Any],
+    transition: dict[str, Any],
+) -> bool:
+    """Return whether the hashed transition has Pattern 2 identity."""
+    scenario = Pattern2Scenario()
+    source_event = f"{_scenario_field(manifest, 'read_tool', scenario.read_tool)} tool result"
+    destination = _scenario_field(manifest, "action_tool", scenario.action_tool)
+    return (
+        transition.get("source_event") == source_event
+        and transition.get("destination_capability") == destination
+    )
+
+
+def _transition_matches_cascade(
+    manifest: dict[str, Any],
+    transition: dict[str, Any],
+) -> bool:
+    """Return whether the hashed transition has cascade identity."""
+    scenario = CascadeMemoScenario()
+    source_event = _CASCADE_EVENT_SEPARATOR.join(
+        (
+            _scenario_field(manifest, "inbox_tool", scenario.inbox_tool),
+            _scenario_field(manifest, "persist_tool", scenario.persist_tool),
+            _scenario_field(manifest, "memo_tool", scenario.memo_tool),
+        )
+    )
+    destination = _scenario_field(manifest, "action_tool", scenario.action_tool)
+    return (
+        transition.get("source_event") == source_event
+        and transition.get("destination_capability") == destination
+    )
+
+
+def _transition_matches_pattern3(transition: dict[str, Any]) -> bool:
+    """Return whether the hashed transition has Pattern 3 identity."""
+    return (
+        transition.get("source_event") == _PATTERN3_SOURCE_EVENT
+        and transition.get("destination_capability") == _PATTERN3_DESTINATION_CAPABILITY
+    )
+
+
+def _scenario_field(manifest: dict[str, Any], key: str, default: str) -> str:
+    """Return a string scenario field, falling back to the default scenario pin."""
+    scenario = manifest.get("scenario")
+    if not isinstance(scenario, dict):
+        return default
+    value = scenario.get(key)
+    return value if isinstance(value, str) and value else default
 
 
 def _pattern2_required_artifacts(manifest: dict[str, Any]) -> set[str]:

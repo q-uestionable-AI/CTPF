@@ -168,6 +168,8 @@ def _write_split_cascade_bundle(tmp_path: Path) -> Path:
     transition = {
         "promotion_reason": PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT.value,
         "promotion_result": PromotionResult.CONFIRMED.value,
+        "destination_capability": "apply_change",
+        "source_event": "read_inbox \u2192 write_memo \u2192 read_memo",
     }
     result_path = bundle / RESULT_NAME
     result_path.write_text(json.dumps(transition, sort_keys=True) + "\n", encoding="utf-8")
@@ -202,6 +204,8 @@ def _write_pattern3_like_bundle(tmp_path: Path) -> Path:
     transition = {
         "promotion_reason": PromotionReason.CONFIRMED_CLEAN_BASELINE_PROMOTED_TREATMENT.value,
         "promotion_result": PromotionResult.CONFIRMED.value,
+        "destination_capability": "write_record",
+        "source_event": "read_record tool result",
     }
     result_path = bundle / RESULT_NAME
     result_path.write_text(
@@ -390,6 +394,69 @@ class TestVerifyEvidenceBundle:
         assert result.ok is False
         assert any(
             item.code == "artifact_missing" and "baseline/session.json" in item.message
+            for item in result.failures
+        )
+
+    def test_pattern2_without_scenario_id_cannot_select_pattern3_shape(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        bundle = _write_bundle(tmp_path)
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        del manifest["scenario"]["scenario_id"]
+        _add_pattern3_spoof_shape(bundle, manifest)
+        hashes = manifest["artifact_hashes"]
+        _remove_artifacts_from_payload(
+            bundle,
+            hashes,
+            (BASELINE_TRACE_NAME, MANIPULATED_TRACE_NAME, MANIPULATED_SINK_NAME),
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "manifest_invalid" and "trust_transition" in item.message
+            for item in result.failures
+        )
+
+    def test_cascade_without_scenario_id_cannot_select_pattern3_shape(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        bundle = _write_split_cascade_bundle(tmp_path)
+        manifest_path = bundle / MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        del manifest["scenario"]["scenario_id"]
+        _add_pattern3_spoof_shape(bundle, manifest)
+        hashes = manifest["artifact_hashes"]
+        _remove_artifacts_from_payload(
+            bundle,
+            hashes,
+            (
+                BASELINE_SESSION_A_TRACE_NAME,
+                BASELINE_SESSION_B_TRACE_NAME,
+                MANIPULATED_SESSION_A_TRACE_NAME,
+                MANIPULATED_SESSION_B_TRACE_NAME,
+                MANIPULATED_MEMO_NAME,
+                MANIPULATED_SINK_NAME,
+            ),
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        result = verify_evidence_bundle(bundle)
+
+        assert result.ok is False
+        assert any(
+            item.code == "manifest_invalid" and "trust_transition" in item.message
             for item in result.failures
         )
 
